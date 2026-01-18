@@ -15,7 +15,7 @@ export async function PATCH(req: Request, { params }: Context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // ✅ Next.js 16: params Promise → await
+  // ✅ Next.js 16 → await params
   const { id } = await params;
 
   if (!id) {
@@ -27,11 +27,20 @@ export async function PATCH(req: Request, { params }: Context) {
 
   const { title, content } = await req.json();
 
-  const document = await prisma.document.update({
+  // ✅ Ownership kontrolü
+  const existingDocument = await prisma.document.findFirst({
     where: {
       id,
-      userId: session.user.id, // ✅ güvenlik
+      userId: session.user.id,
     },
+  });
+
+  if (!existingDocument) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  const document = await prisma.document.update({
+    where: { id },
     data: {
       title,
       content,

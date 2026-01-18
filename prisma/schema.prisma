@@ -20,7 +20,6 @@ model User {
 
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
-
 }
 
 model Account {
@@ -29,6 +28,7 @@ model Account {
   type              String
   provider          String
   providerAccountId String
+
   refresh_token     String?
   access_token      String?
   expires_at        Int?
@@ -40,6 +40,7 @@ model Account {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
+  @@index([userId])
 }
 
 model Session {
@@ -49,6 +50,8 @@ model Session {
   expires      DateTime
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model VerificationToken {
@@ -62,11 +65,13 @@ model VerificationToken {
 model Document {
   id        String   @id @default(cuid())
   title     String
-  content   String?
+  content   String?   // AI çıktısı (ilk başta boş olabilir)
 
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }
