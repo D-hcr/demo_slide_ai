@@ -1,51 +1,129 @@
 "use client"
 
-import { useState } from "react"
-import type { SlideDeck } from "@/types/slide"
-import { SlideDeckView } from "@/components/slides"
+import { useEffect, useState } from "react"
+import type { SlideDeck, Slide } from "@/types/slide"
 
-export default function SlideWorkspace() {
-  const [deck, setDeck] = useState<SlideDeck | null>(null)
-  const [loading, setLoading] = useState(false)
+import { SlideList } from "./SlideList"
+import ActiveSlideEditor from "./ActiveSlideEditor"
+import SlideToolbar from "./SlideToolbar"
 
-  async function generate(topic: string) {
-    setLoading(true)
+export default function SlideWorkspace({
+  deck,
+}: {
+  deck: SlideDeck | null
+}) {
+  const [localDeck, setLocalDeck] = useState<SlideDeck | null>(null)
+  const [activeId, setActiveId] = useState<number | null>(null)
 
-    const res = await fetch("/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topic }),
+  // 🔑 DECK GELDİĞİNDE STATE'İ KUR
+  useEffect(() => {
+  if (!deck) return
+
+  const clonedDeck: SlideDeck = {
+    ...deck,
+    slides: deck.slides.map((s) => ({ ...s })),
+  }
+
+  setLocalDeck(clonedDeck)
+  setActiveId(clonedDeck.slides[0]?.id ?? null)
+  }, [deck])
+
+  // 🔐 GÜVENLİ RENDER
+  if (!localDeck || activeId === null) {
+    return (
+      <div className="m-auto text-zinc-500">
+        Henüz slide oluşturulmadı
+      </div>
+    )
+  }
+
+  const activeSlide = localDeck.slides.find(
+    (s) => s.id === activeId
+  )!
+
+  function updateSlide(updated: Slide) {
+    if (!localDeck) return
+    setLocalDeck({
+      ...localDeck,
+      slides: localDeck.slides.map((s) =>
+        s.id === updated.id ? updated : s
+      ),
+    })
+  }
+
+  function addSlide() {
+    if (!localDeck) return
+    const newSlide: Slide = {
+      id: Date.now(),
+      title: "Yeni Slide",
+      bullets: ["Yeni madde"],
+      imagePrompt: "",
+    }
+
+    setLocalDeck({
+      ...localDeck,
+      slides: [...localDeck.slides, newSlide],
     })
 
-    const data = await res.json()
+    setActiveId(newSlide.id)
+  }
 
-    // Eğer API string JSON dönüyorsa:
-    const parsed =
-      typeof data.slides === "string"
-        ? JSON.parse(data.slides)
-        : data
+  function deleteSlide() {
+    if (!localDeck || localDeck.slides.length === 1) return
 
-    setDeck(parsed)
-    setLoading(false)
+    const filtered = localDeck.slides.filter(
+      (s) => s.id !== activeId
+    )
+
+    setLocalDeck({
+      ...localDeck,
+      slides: filtered,
+    })
+
+    setActiveId(filtered[0].id)
+  }
+
+  function moveSlide(dir: "up" | "down") {
+    if (!localDeck) return
+    const i = localDeck.slides.findIndex(
+      (s) => s.id === activeId
+    )
+
+    const j = dir === "up" ? i - 1 : i + 1
+    if (j < 0 || j >= localDeck.slides.length) return
+
+    const reordered = [...localDeck.slides]
+    ;[reordered[i], reordered[j]] = [
+      reordered[j],
+      reordered[i],
+    ]
+
+    setLocalDeck({
+      ...localDeck,
+      slides: reordered,
+    })
   }
 
   return (
-    <div className="h-full w-full flex flex-col">
-      <button
-        onClick={() => generate("Yapay Zeka Nedir")}
-        className="mb-4 px-4 py-2 bg-white text-black rounded self-start"
-      >
-        {loading ? "Oluşturuluyor..." : "Sunum Oluştur"}
-      </button>
+    <div className="flex w-full h-full flex-col">
+      <SlideToolbar
+        onAdd={addSlide}
+        onDelete={deleteSlide}
+        onMoveUp={() => moveSlide("up")}
+        onMoveDown={() => moveSlide("down")}
+      />
 
-      <div className="flex-1 overflow-auto">
-        {deck ? (
-          <SlideDeckView deck={deck} />
-        ) : (
-          <div className="text-zinc-500 text-center mt-20">
-            Henüz slide oluşturulmadı
-          </div>
-        )}
+      <div className="flex flex-1">
+        <SlideList
+          slides={localDeck.slides}
+          activeId={activeId}
+          onSelect={setActiveId}
+        />
+
+        <ActiveSlideEditor
+          slide={activeSlide}
+          onChange={updateSlide}
+        />
       </div>
     </div>
   )

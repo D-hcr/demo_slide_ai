@@ -1,4 +1,3 @@
-// types/slide.ts
 export interface SlideDeck {
   title: string
   description?: string

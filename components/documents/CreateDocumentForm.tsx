@@ -1,37 +1,34 @@
-"use client";
+"use client"
 
-import { useState } from "react";
+import { useState } from "react"
+import type { SlideDeck } from "@/types/slide"
 
-export default function CreateDocumentForm() {
-  const [topic, setTopic] = useState("");
-  const [loading, setLoading] = useState(false);
+export default function CreateDocumentForm({
+  onGenerated,
+}: {
+  onGenerated: (deck: SlideDeck) => void
+}) {
+  const [topic, setTopic] = useState("")
+  const [loading, setLoading] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
+    e.preventDefault()
+    if (!topic.trim()) return
 
-    // 1️⃣ boş document oluştur
-    const res = await fetch("/api/documents", {
+    setLoading(true)
+
+    const res = await fetch("/api/generate", {
       method: "POST",
-      body: JSON.stringify({
-        title: topic,
-        topic,
-      }),
-    });
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic }),
+    })
 
-    const doc = await res.json();
+    const deck: SlideDeck = await res.json()
 
-    // 2️⃣ AI generate
-    await fetch("/api/generate", {
-      method: "POST",
-      body: JSON.stringify({
-        documentId: doc.id,
-        topic,
-      }),
-    });
+    onGenerated(deck)
 
-    setLoading(false);
-    setTopic("");
+    setTopic("")
+    setLoading(false)
   }
 
   return (
@@ -45,11 +42,11 @@ export default function CreateDocumentForm() {
       />
 
       <button
-        className="w-full rounded bg-white text-black py-2 hover:bg-zinc-200"
+        className="w-full rounded bg-white text-black py-2"
         disabled={loading}
       >
         {loading ? "Slide oluşturuluyor..." : "Generate Slides"}
       </button>
     </form>
-  );
+  )
 }
