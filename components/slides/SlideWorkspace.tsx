@@ -6,16 +6,25 @@ import type { SlideDeck, Slide } from "@/types/slide"
 import { SlideList } from "./SlideList"
 import ActiveSlideEditor from "./ActiveSlideEditor"
 import SlideToolbar from "./SlideToolbar"
+import ActiveSlideView from "./ActiveSlideView"
+
+import { slideThemes } from "@/lib/slideThemes"
+import { getThemeByName } from "@/lib/slideThemes"
+
 
 export default function SlideWorkspace({
   deck,
+  deckId
 }: {
   deck: SlideDeck | null
+  deckId: string
 }) {
   const [localDeck, setLocalDeck] = useState<SlideDeck | null>(null)
   const [activeId, setActiveId] = useState<number | null>(null)
+  const [activeTheme, setActiveTheme] = useState(slideThemes[0])
 
   // 🔑 DECK GELDİĞİNDE STATE'İ KUR
+
   useEffect(() => {
   if (!deck) return
 
@@ -26,7 +35,10 @@ export default function SlideWorkspace({
 
   setLocalDeck(clonedDeck)
   setActiveId(clonedDeck.slides[0]?.id ?? null)
-  }, [deck])
+
+  // ✅ theme restore
+  setActiveTheme(getThemeByName(deck.themeName))
+}, [deck])
 
   // 🔐 GÜVENLİ RENDER
   if (!localDeck || activeId === null) {
@@ -41,9 +53,9 @@ export default function SlideWorkspace({
     (s) => s.id === activeId
   )!
 
-  function updateSlide(updated: Slide) {
-    if (!localDeck) return
-    setLocalDeck({
+  function updateSlide(updated: Slide) { 
+    if (!localDeck) return 
+    setLocalDeck({ 
       ...localDeck,
       slides: localDeck.slides.map((s) =>
         s.id === updated.id ? updated : s
@@ -53,6 +65,7 @@ export default function SlideWorkspace({
 
   function addSlide() {
     if (!localDeck) return
+
     const newSlide: Slide = {
       id: Date.now(),
       title: "Yeni Slide",
@@ -60,9 +73,9 @@ export default function SlideWorkspace({
       imagePrompt: "",
     }
 
-    setLocalDeck({
-      ...localDeck,
-      slides: [...localDeck.slides, newSlide],
+    setLocalDeck({ 
+      ...localDeck, 
+      slides: [...localDeck.slides, newSlide], 
     })
 
     setActiveId(newSlide.id)
@@ -85,6 +98,7 @@ export default function SlideWorkspace({
 
   function moveSlide(dir: "up" | "down") {
     if (!localDeck) return
+
     const i = localDeck.slides.findIndex(
       (s) => s.id === activeId
     )
@@ -104,6 +118,21 @@ export default function SlideWorkspace({
     })
   }
 
+  async function saveDeck() {
+  if (!localDeck) return
+
+  await fetch(`/api/documents/${deckId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      deck: localDeck,
+    }),
+  })
+}
+
+
   return (
     <div className="flex w-full h-full flex-col">
       <SlideToolbar
@@ -111,9 +140,32 @@ export default function SlideWorkspace({
         onDelete={deleteSlide}
         onMoveUp={() => moveSlide("up")}
         onMoveDown={() => moveSlide("down")}
+        onSave={saveDeck}
       />
 
-      <div className="flex flex-1">
+      {/* THEME SELECTOR (UI ONLY) */}
+      <div className="px-4 py-2"> 
+        <select
+          className="bg-zinc-800 text-white px-3 py-1 rounded"
+          value={activeTheme.name}
+          onChange={(e) => {
+            const theme = getThemeByName(e.target.value)
+            setActiveTheme(theme)
+            setLocalDeck({
+            ...localDeck,
+            themeName: theme.name,
+          })
+          }}
+        >
+          {slideThemes.map((t) => (
+            <option key={t.name} value={t.name}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="flex flex-1 overflow-hidden">
         <SlideList
           slides={localDeck.slides}
           activeId={activeId}
@@ -124,6 +176,11 @@ export default function SlideWorkspace({
           slide={activeSlide}
           onChange={updateSlide}
         />
+
+        <ActiveSlideView
+          slide={activeSlide}
+          theme={activeTheme}
+        /> 
       </div>
     </div>
   )

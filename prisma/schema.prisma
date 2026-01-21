@@ -65,8 +65,9 @@ model VerificationToken {
 model Document {
   id        String   @id @default(cuid())
   title     String
-  content   String?   // AI çıktısı (ilk başta boş olabilir)
-
+  content   Json?  
+  themeName String?
+  
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -75,3 +76,4 @@ model Document {
 
   @@index([userId])
 }
+

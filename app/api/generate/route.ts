@@ -1,9 +1,27 @@
+// app/api/generate/route.ts
+
 import { generateSlides } from "@/lib/groq"
 
 export async function POST(req: Request) {
-  const { topic } = await req.json()
+  try {
+    const { topic } = await req.json()
 
-  const slideDeck = await generateSlides(topic)
+    if (!topic || typeof topic !== "string") {
+      return new Response(
+        JSON.stringify({ error: "Invalid topic" }),
+        { status: 400 }
+      )
+    }
 
-  return Response.json(slideDeck)
+    const slideDeck = await generateSlides(topic)
+
+    return Response.json(slideDeck)
+  } catch (error) {
+    console.error("Generate error:", error)
+
+    return new Response(
+      JSON.stringify({ error: "Slide generation failed" }),
+      { status: 500 }
+    )
+  }
 }

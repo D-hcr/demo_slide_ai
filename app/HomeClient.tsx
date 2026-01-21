@@ -9,6 +9,7 @@ import AuthStatus from "@/components/auth/auth-status"
 
 export default function HomeClient({ session }: { session: any }) {
   const [deck, setDeck] = useState<SlideDeck | null>(null)
+  const [deckId, setDeckId] = useState<string>("")
 
   return (
     <div className="flex min-h-screen bg-zinc-950 text-zinc-100">
@@ -24,7 +25,10 @@ export default function HomeClient({ session }: { session: any }) {
 
         {session && (
           <div className="mt-6">
-            <CreateDocumentForm onGenerated={setDeck} />
+            <CreateDocumentForm onGenerated={(newDeck) => {
+              setDeck(newDeck)
+              setDeckId(newDeck.id || "")
+            }} />
           </div>
         )}
       </div>
@@ -32,7 +36,7 @@ export default function HomeClient({ session }: { session: any }) {
       {/* SAĞ PANEL */}
       <div className="hidden md:flex w-1/2 bg-zinc-900 p-6">
         {session ? (
-          <SlideWorkspace deck={deck} />
+          <SlideWorkspace deck={deck} deckId={deckId} />
         ) : (
           <div className="m-auto text-zinc-500">
             Slide oluşturmak için giriş yap

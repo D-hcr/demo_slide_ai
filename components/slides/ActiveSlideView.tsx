@@ -1,32 +1,59 @@
 "use client"
 
-import type { Slide } from "@/types/slide"
+import type { Slide, SlideTheme } from "@/types/slide"
 
-export function ActiveSlideView({ slide }: { slide: Slide }) {
+export default function ActiveSlideView({
+  slide,
+  theme,
+}: {
+  slide: Slide
+  theme: SlideTheme
+}) {
   return (
-    <div className="flex-1 p-8">
+    <div className="flex justify-center items-start flex-1 bg-zinc-950 p-6 overflow-auto">
+      {/* SLIDE CANVAS */}
+      <div
+        className={`
+          w-[960px]
+          aspect-video
+          rounded-lg
+          shadow-2xl
+          p-12
+          flex
+          flex-col
+          ${theme.background}
+          ${theme.text}
+          ${theme.fontFamily}
+        `}
+      >
+        {/* TITLE */}
+        <h1 className={`${theme.titleSize} font-bold mb-8`}>
+          {slide.title || "Slide Title"}
+        </h1>
 
-      <h2 className="text-2xl font-bold mb-6">
-        {slide.title}
-      </h2>
+        {/* BULLETS */}
+        <ul
+          className={`
+            list-disc
+            pl-6
+            space-y-4
+            flex-1
+            ${theme.bulletSize}
+          `}
+        >
+          {slide.bullets.map((b, i) => (
+            <li key={i}>{b || "Bullet text"}</li>
+          ))}
+        </ul>
 
-      <ul className="list-disc pl-6 space-y-3 text-zinc-200">
-        {slide.bullets.map((b, i) => (
-          <li key={i}>{b}</li>
-        ))}
-      </ul>
-
-      <div className="mt-8 text-sm text-zinc-400 border-t border-zinc-800 pt-4">
-        <strong>Image Prompt:</strong>
-        <p className="mt-1">{slide.imagePrompt}</p>
+        {/* FOOTER / IMAGE PROMPT */}
+        {slide.imagePrompt && (
+          <div className="mt-8 pt-4 border-t border-zinc-200 text-sm opacity-70">
+            <strong>Image prompt:</strong>
+            <p>{slide.imagePrompt}</p>
+          </div>
+        )}
       </div>
-
-      {slide.notes && (
-        <div className="mt-4 text-sm text-zinc-400">
-          <strong>Notes:</strong>
-          <p>{slide.notes}</p>
-        </div>
-      )}
     </div>
   )
 }

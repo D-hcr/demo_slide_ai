@@ -5,6 +5,7 @@ interface Props {
   onDelete: () => void
   onMoveUp: () => void
   onMoveDown: () => void
+  onSave: () => void
 }
 
 export default function SlideToolbar({
@@ -12,35 +13,20 @@ export default function SlideToolbar({
   onDelete,
   onMoveUp,
   onMoveDown,
+  onSave,
 }: Props) {
   return (
     <div className="flex gap-2 border-b border-zinc-800 p-3">
-      <button
-        onClick={onAdd}
-        className="rounded bg-zinc-800 px-3 py-1 text-sm hover:bg-zinc-700"
-      >
-        ➕ Add
-      </button>
+      <button onClick={onAdd} className="btn">➕ Add</button>
+      <button onClick={onDelete} className="btn">🗑 Delete</button>
+      <button onClick={onMoveUp} className="btn">⬆ Up</button>
+      <button onClick={onMoveDown} className="btn">⬇ Down</button>
 
       <button
-        onClick={onDelete}
-        className="rounded bg-zinc-800 px-3 py-1 text-sm hover:bg-zinc-700"
+        onClick={onSave}
+        className="ml-auto rounded bg-green-600 px-3 py-1 text-white"
       >
-        🗑 Delete
-      </button>
-
-      <button
-        onClick={onMoveUp}
-        className="rounded bg-zinc-800 px-3 py-1 text-sm hover:bg-zinc-700"
-      >
-        ⬆ Up
-      </button>
-
-      <button
-        onClick={onMoveDown}
-        className="rounded bg-zinc-800 px-3 py-1 text-sm hover:bg-zinc-700"
-      >
-        ⬇ Down
+        💾 Save
       </button>
     </div>
   )

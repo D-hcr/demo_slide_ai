@@ -1,51 +1,38 @@
-import { prisma } from "@/lib/prisma";
-import { auth } from "@/lib/auth";
-import { NextResponse } from "next/server";
+import { NextResponse } from "next/server"
+import { auth } from "@/lib/auth"
+import { prisma } from "@/lib/prisma"
 
-type Context = {
-  params: Promise<{
-    id: string;
-  }>;
-};
-
-export async function PATCH(req: Request, { params }: Context) {
-  const session = await auth();
+export async function PATCH(req: Request) {
+  const session = await auth()
 
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json(
+      { error: "Unauthorized" },
+      { status: 401 }
+    )
   }
 
-  // ✅ Next.js 16 → await params
-  const { id } = await params;
+  const body = await req.json()
+  const { id, content, title, themeName } = body
 
   if (!id) {
     return NextResponse.json(
       { error: "Document id missing" },
       { status: 400 }
-    );
-  }
-
-  const { title, content } = await req.json();
-
-  // ✅ Ownership kontrolü
-  const existingDocument = await prisma.document.findFirst({
-    where: {
-      id,
-      userId: session.user.id,
-    },
-  });
-
-  if (!existingDocument) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    )
   }
 
   const document = await prisma.document.update({
-    where: { id },
+    where: {
+      id,
+      userId: session.user.id, // 🔐 güvenlik
+    },
     data: {
       title,
       content,
+      themeName,
     },
-  });
+  })
 
-  return NextResponse.json(document);
+  return NextResponse.json(document)
 }
