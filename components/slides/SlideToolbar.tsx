@@ -6,6 +6,9 @@ interface Props {
   onMoveUp: () => void
   onMoveDown: () => void
   onSave: () => void
+  isSaving: boolean
+  isDirty: boolean
+  deckId: string
 }
 
 export default function SlideToolbar({
@@ -14,6 +17,9 @@ export default function SlideToolbar({
   onMoveUp,
   onMoveDown,
   onSave,
+  isSaving,
+  isDirty,
+  deckId,
 }: Props) {
   return (
     <div className="flex gap-2 border-b border-zinc-800 p-3">
@@ -24,9 +30,22 @@ export default function SlideToolbar({
 
       <button
         onClick={onSave}
-        className="ml-auto rounded bg-green-600 px-3 py-1 text-white"
+        disabled={isSaving}
+        className="ml-auto rounded bg-green-600 px-3 py-1 text-white disabled:opacity-50"
       >
-        💾 Save
+        {isSaving ? "💾 Saving..." : "💾 Save"}
+      </button>
+
+      <button
+        onClick={() =>
+          window.open(
+            `/api/documents/${deckId}/export/pdf`,
+            "_self"
+          )
+        }
+        className="px-3 py-1 bg-zinc-700 text-white rounded"
+      >
+        📄 PDF Export
       </button>
     </div>
   )

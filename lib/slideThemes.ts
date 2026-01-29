@@ -8,6 +8,10 @@ export const defaultTheme: SlideTheme = {
   titleSize: "text-3xl",
   bulletSize: "text-lg",
   fontFamily: "font-sans",
+
+  exportBackground: "#ffffff",
+  exportText: "#111111",
+  exportAccent: "#2563eb", // blue-600
 }
 
 export const darkTheme: SlideTheme = {
@@ -18,13 +22,14 @@ export const darkTheme: SlideTheme = {
   titleSize: "text-3xl",
   bulletSize: "text-lg",
   fontFamily: "font-sans",
+
+  exportBackground: "#111111",
+  exportText: "#ffffff",
+  exportAccent: "#60a5fa", // blue-400
 }
 
-export const slideThemes: SlideTheme[] = [
-  defaultTheme,
-  darkTheme,
-]
+export const slideThemes: SlideTheme[] = [defaultTheme, darkTheme]
 
 export function getThemeByName(name?: string): SlideTheme {
-  return slideThemes.find(t => t.name === name) ?? defaultTheme
+  return slideThemes.find((t) => t.name === name) ?? defaultTheme
 }
