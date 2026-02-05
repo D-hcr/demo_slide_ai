@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SlideDeck } from "@/types/slide";
 
 import ChatWorkspace from "@/components/chat/ChatWorkspace";
@@ -12,7 +12,7 @@ type SlideDeckResponse = {
   id?: string;
   title?: string;
   slides?: any[];
-  content?: any[];
+  content?: any; // ✅ artifact envelope object da olabilir
   themeName?: string;
   updatedAt?: string;
 };
@@ -27,11 +27,34 @@ function normalizeDeck(raw: SlideDeckResponse): SlideDeck | null {
   const id = raw.id;
   if (!id) return null;
 
+  const slidesFromSlides = Array.isArray(raw.slides) ? raw.slides : null;
+  const slidesFromLegacy = Array.isArray(raw.content) ? raw.content : null;
+
+  const slidesFromArtifact =
+    raw.content &&
+    typeof raw.content === "object" &&
+    (raw.content as any).artifact?.state?.deck?.slides;
+
+  const slides =
+    slidesFromSlides ??
+    slidesFromLegacy ??
+    (Array.isArray(slidesFromArtifact) ? slidesFromArtifact : []);
+
+  const themeFromArtifact =
+    raw.content &&
+    typeof raw.content === "object" &&
+    (raw.content as any).artifact?.state?.deck?.themeName;
+
+  const titleFromArtifact =
+    raw.content &&
+    typeof raw.content === "object" &&
+    (raw.content as any).artifact?.state?.deck?.title;
+
   return {
     id,
-    title: raw.title ?? "Yeni Sunum",
-    slides: (raw.slides ?? raw.content ?? []) as any[],
-    themeName: raw.themeName ?? "Default",
+    title: raw.title ?? titleFromArtifact ?? "Yeni Sunum",
+    slides: slides as any[],
+    themeName: raw.themeName ?? themeFromArtifact ?? "Default",
   };
 }
 
@@ -40,20 +63,21 @@ export default function HomeClient({ session }: { session: any }) {
   const [deckId, setDeckId] = useState<string | null>(null);
   const [deck, setDeck] = useState<SlideDeck | null>(null);
 
-  // ✅ chat update ile SlideWorkspace re-init tetiklemek için
   const [deckVersion, setDeckVersion] = useState<number>(0);
-
   const [loading, setLoading] = useState(true);
 
-  // ✅ SADECE gerçekten slayt varsa sağ panel açılır
-  const hasActiveDeck = useMemo(() => {
+  const didInitRef = useRef(false);
+  const lastLoadedDeckIdRef = useRef<string | null>(null);
+
+  // ✅ SADECE slayt varsa sağ panel açılsın
+  const hasSlides = useMemo(() => {
     return (
       !!deckId &&
       !!deck &&
       Array.isArray(deck.slides) &&
       deck.slides.length > 0
     );
-  }, [deck, deckId]);
+  }, [deckId, deck]);
 
   async function refreshPresentations() {
     const res = await fetch("/api/documents", { cache: "no-store" });
@@ -63,12 +87,16 @@ export default function HomeClient({ session }: { session: any }) {
   }
 
   async function loadDeckById(id: string) {
+    if (lastLoadedDeckIdRef.current === id && deckId === id && deck) return;
+
     const res = await fetch(`/api/documents/${id}`, { cache: "no-store" });
     if (!res.ok) return;
 
     const raw: SlideDeckResponse = await res.json();
     const fixed = normalizeDeck(raw);
     if (!fixed) return;
+
+    lastLoadedDeckIdRef.current = fixed.id;
 
     setDeck(fixed);
     setDeckId(fixed.id);
@@ -85,6 +113,15 @@ export default function HomeClient({ session }: { session: any }) {
     const fixed = normalizeDeck(raw);
     if (!fixed) return;
 
+    if (
+      lastLoadedDeckIdRef.current === fixed.id &&
+      deckId === fixed.id &&
+      deck
+    )
+      return;
+
+    lastLoadedDeckIdRef.current = fixed.id;
+
     setDeck(fixed);
     setDeckId(fixed.id);
     setDeckVersion((v) => v + 1);
@@ -100,7 +137,9 @@ export default function HomeClient({ session }: { session: any }) {
 
     await refreshPresentations();
 
-    // ✅ deckId set edilir ama slides boş => hasActiveDeck false => sağ panel hiç mount olmaz
+    lastLoadedDeckIdRef.current = fixed.id;
+
+    // ✅ yeni sunum: deck var ama slides boş => sağ panel hiç görünmez
     setDeckId(fixed.id);
     setDeck({
       ...fixed,
@@ -125,9 +164,13 @@ export default function HomeClient({ session }: { session: any }) {
 
   useEffect(() => {
     if (!session) {
+      didInitRef.current = false;
       setLoading(false);
       return;
     }
+
+    if (didInitRef.current) return;
+    didInitRef.current = true;
 
     (async () => {
       try {
@@ -189,6 +232,8 @@ export default function HomeClient({ session }: { session: any }) {
             setDeck(null);
             setDeckId(null);
             setDeckVersion((v) => v + 1);
+            lastLoadedDeckIdRef.current = null;
+
             await refreshPresentations();
             await loadLatestDeck();
           } else {
@@ -200,13 +245,15 @@ export default function HomeClient({ session }: { session: any }) {
       <main className="flex flex-1 overflow-hidden">
         <div className="flex w-full h-full">
           <ChatWorkspace
-            centered={!hasActiveDeck}
+            centered={!hasSlides}
             deckId={deckId}
-            onGeneratedOrUpdated={async (raw: SlideDeckResponse | null) => {
+            onGeneratedOrUpdated={async (raw: any | null) => {
               if (!raw) return;
 
               const fixed = normalizeDeck(raw as any);
               if (!fixed) return;
+
+              lastLoadedDeckIdRef.current = fixed.id;
 
               setDeck(fixed);
               setDeckId(fixed.id);
@@ -215,10 +262,11 @@ export default function HomeClient({ session }: { session: any }) {
             }}
           />
 
-          {/* ✅ Sağ panel sadece slayt varsa mount olur (new presentation'da hiç görünmez) */}
-          {hasActiveDeck && deck && deckId ? (
+          {/* ✅ Sağ panel sadece slayt varsa mount olur */}
+          {hasSlides && deck && deckId ? (
             <div className="flex-1 opacity-100 transition-all duration-700 ease-in-out overflow-hidden">
               <SlideWorkspace
+                key={`${deckId}:${deckVersion}`}
                 deck={deck}
                 deckId={deckId}
                 deckVersion={deckVersion}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ChatMessage, { ChatRole } from "./ChatMessage";
 import ChatInput from "./ChatInput";
 import type { SlideDeckResponse } from "@/types/slide";
@@ -22,20 +22,43 @@ export default function ChatWorkspace({
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // ✅ deck değişince o deck’in chat’ini yükle
+  // ✅ callback ref (deps yüzünden effect loop olmasın)
+  const onGeneratedRef = useRef(onGeneratedOrUpdated);
+  useEffect(() => {
+    onGeneratedRef.current = onGeneratedOrUpdated;
+  }, [onGeneratedOrUpdated]);
+
+  // ✅ yalnızca "başarılı yükleme" sonrası işaretle
+  const lastLoadedChatDeckIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
 
     if (!deckId) {
+      lastLoadedChatDeckIdRef.current = null;
       setMessages([]);
       setLoading(false);
-      return;
+      return () => {
+        controller.abort();
+      };
     }
+
+    // ✅ aynı deckId başarılı yüklendiyse tekrar fetch atma
+    if (lastLoadedChatDeckIdRef.current === deckId) return;
+
+    // deck değişti, UI boş kalmasın diye mevcut mesajları temizle
+    setMessages([]);
+    setLoading(true);
 
     (async () => {
       try {
-        setLoading(true);
-        const res = await fetch(`/api/documents/${deckId}/chat`, { cache: "no-store" });
+        const res = await fetch(`/api/documents/${deckId}/chat`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+
+        // ❗ başarısızsa ref set ETME → sonraki render’da tekrar deneyebilsin
         if (!res.ok) return;
 
         const data = await res.json();
@@ -49,10 +72,13 @@ export default function ChatWorkspace({
           }))
         );
 
-        // ✅ deck bilgisi de gelsin (sunumu güncelleyecek)
-        onGeneratedOrUpdated(data?.deck ?? null);
+        // ✅ başarılı yükleme → şimdi ref'i set et
+        lastLoadedChatDeckIdRef.current = deckId;
+
+        // ✅ deck bilgisi de gelsin
+        onGeneratedRef.current(data?.deck ?? null);
       } catch {
-        // ignore
+        // ignore (abort vs)
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -60,6 +86,7 @@ export default function ChatWorkspace({
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [deckId]);
 
@@ -91,7 +118,11 @@ export default function ChatWorkspace({
         }))
       );
 
-      onGeneratedOrUpdated(data?.deck ?? null);
+      // POST sonrası deck güncellendi
+      onGeneratedRef.current(data?.deck ?? null);
+
+      // ✅ bu deck için chat zaten yüklü sayılır
+      lastLoadedChatDeckIdRef.current = deckId;
     } catch {
       setMessages((m) => m.filter((x) => x.role !== "system"));
       setMessages((m) => [...m, { role: "assistant", content: "Bir hata oluştu." }]);

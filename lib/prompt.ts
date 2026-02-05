@@ -14,14 +14,9 @@ JSON FORMAT (must match exactly):
 {
   "title": string,
   "description": string,
-  "theme": {
-    "primary": string,
-    "secondary": string,
-    "background": string
-  },
+  "themeName": string,
   "slides": [
     {
-      "id": number,
       "title": string,
       "bullets": string[],
       "layout": "text-left" | "image-left" | "full-image",
@@ -37,27 +32,16 @@ TOPIC:
 DESIGN RULES:
 - 8 to 10 slides
 - Modern, minimal, corporate style
-- Prefer blue, grey, anthracite tones unless specified otherwise
-- Alternate layouts between slides (rotate: text-left -> image-left -> full-image)
-- IDs must start from 1
+- Alternate layouts between slides
+- DO NOT generate slide IDs (server will handle IDs)
 
-IMAGE PROMPT RULES (VERY IMPORTANT):
-- imagePrompt MUST be unique for every slide (never reuse or paraphrase the same prompt)
-- imagePrompt MUST include:
-  - the slide title concept (use 2-4 concrete nouns from the title/bullets)
-  - a distinct scene/object set for that slide (different from other slides)
-  - "flat vector illustration, minimal, corporate, no text, no watermark, clean background"
-- imagePrompt MUST NOT contain:
-  - any written text inside the image
-  - logos/watermarks
-
-CONTENT RULES:
-- Each slide: 3–5 bullet points
-- Short, slide-friendly bullets
-- No emojis
+IMAGE PROMPT RULES:
+- imagePrompt MUST be unique for every slide
+- flat vector illustration, minimal, corporate, no text, no watermark
 
 RETURN ONLY JSON
 `
+
 export const buildRegenerateSlideTextPrompt = (slide: Slide) => `
 You are an AI slide editor.
 

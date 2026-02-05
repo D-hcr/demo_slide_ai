@@ -23,21 +23,41 @@ export default function SlideWorkspace({
 }) {
   const [localDeck, setLocalDeck] = useState<SlideDeck | null>(null)
 
-  // ✅ string id
   const [activeId, setActiveId] = useState<string | null>(null)
-
   const [activeTheme, setActiveTheme] = useState(slideThemes[0])
 
   const [isDirty, setIsDirty] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
 
+  // ✅ UNDO state
+  const [historyLen, setHistoryLen] = useState<number>(0)
+  const [isUndoing, setIsUndoing] = useState(false)
+
   const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const [isExportingPdf, setIsExportingPdf] = useState(false)
+  const [isExportingPptx, setIsExportingPptx] = useState(false)
+
+
+  async function refreshHistoryLen() {
+    if (!deckId) return
+    try {
+      const res = await fetch(`/api/documents/${deckId}`, { cache: "no-store" })
+      if (!res.ok) return
+      const data = await res.json()
+      const n = typeof data?.historyLen === "number" ? data.historyLen : 0
+      setHistoryLen(n)
+    } catch {
+      // ignore
+    }
+  }
 
   useEffect(() => {
     if (!deck) {
       setLocalDeck(null)
       setActiveId(null)
       setIsDirty(false)
+      setHistoryLen(0)
       return
     }
 
@@ -51,7 +71,11 @@ export default function SlideWorkspace({
     setActiveId(slides[0]?.id ?? null)
     setActiveTheme(getThemeByName(deck.themeName))
     setIsDirty(false)
-  }, [deck?.id, deckVersion])
+
+    // ✅ deck değişince historyLen çek
+    refreshHistoryLen()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deckId, deckVersion])
 
   useEffect(() => {
     if (!localDeck || !isDirty || !deckId) return
@@ -105,7 +129,7 @@ export default function SlideWorkspace({
   }
 
   function addSlide() {
-    const newId = crypto.randomUUID() // ✅ stabil string
+    const newId = crypto.randomUUID()
 
     const slide: Slide = {
       id: newId,
@@ -144,7 +168,7 @@ export default function SlideWorkspace({
 
   async function saveDeck() {
     if (!localDeck || !deckId) return
-    await fetch(`/api/documents/${deckId}`, {
+    const res = await fetch(`/api/documents/${deckId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -153,7 +177,93 @@ export default function SlideWorkspace({
         themeName: localDeck.themeName,
       }),
     })
+    // PATCH sonrası history büyümüş olabilir
+    if (res.ok) {
+      try {
+        const data = await res.json()
+        if (typeof data?.historyLen === "number") setHistoryLen(data.historyLen)
+      } catch {}
+    }
     onSaved?.()
+  }
+
+  async function regenerate(mode: "text" | "imagePrompt") {
+    if (!activeSlide || !deckId) return
+
+    const res = await fetch("/api/slides/regenerate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        documentId: deckId,
+        slideId: activeSlide.id,
+        mode,
+      }),
+    })
+    if (!res.ok) return
+
+    const data = await res.json()
+    updateSlide(data.slide)
+    refreshHistoryLen()
+  }
+
+  async function undo() {
+    if (!deckId) return
+    if (historyLen <= 0) return
+
+    setIsUndoing(true)
+    try {
+      const res = await fetch(`/api/documents/${deckId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "undo" }),
+      })
+      if (!res.ok) return
+
+      const data = await res.json()
+
+      const nextDeck = data?.deck as SlideDeck | null
+      if (nextDeck && Array.isArray(nextDeck.slides)) {
+        setLocalDeck({
+          ...nextDeck,
+          slides: nextDeck.slides.map((s) => ({ ...s })),
+        })
+        const stillExists = nextDeck.slides.some((s) => s.id === activeId)
+        setActiveId(stillExists ? activeId : nextDeck.slides[0]?.id ?? null)
+
+        setActiveTheme(getThemeByName(nextDeck.themeName))
+        setIsDirty(false)
+      }
+
+      if (typeof data?.historyLen === "number") {
+        setHistoryLen(data.historyLen)
+      } else {
+        refreshHistoryLen()
+      }
+    } finally {
+      setIsUndoing(false)
+    }
+  }
+
+  async function exportPdf() {
+    if (!deckId) return
+    try {
+      setIsExportingPdf(true)
+      if (isDirty) await saveDeck()
+      window.open(`/api/documents/${deckId}/export/pdf`, "_self")
+    } finally {
+      setIsExportingPdf(false)
+    }
+  }
+
+  async function exportPptx() {
+    if (!deckId) return
+    try {
+      setIsExportingPptx(true)
+      if (isDirty) await saveDeck()
+      window.open(`/api/documents/${deckId}/export/pptx`, "_self")
+    } finally {
+      setIsExportingPptx(false)
+    }
   }
 
   return (
@@ -164,6 +274,15 @@ export default function SlideWorkspace({
         onMoveUp={() => moveSlide("up")}
         onMoveDown={() => moveSlide("down")}
         onSave={saveDeck}
+        onRegenerateText={() => regenerate("text")}
+        onRegenerateImage={() => regenerate("imagePrompt")}
+        onExportPdf={exportPdf}
+        onExportPptx={exportPptx}
+        isExportingPdf={isExportingPdf}
+        isExportingPptx={isExportingPptx}
+        onUndo={undo}
+        canUndo={historyLen > 0}
+        isUndoing={isUndoing}
         isSaving={isSaving}
         isDirty={isDirty}
         deckId={deckId}
@@ -192,6 +311,7 @@ export default function SlideWorkspace({
         <SlideList
           slides={localDeck.slides}
           activeId={activeId ?? localDeck.slides[0]?.id ?? ""}
+          themeName={localDeck.themeName}
           onSelect={setActiveId}
           onReorder={(slides) => {
             setLocalDeck((prev) => (prev ? { ...prev, slides } : prev))

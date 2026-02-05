@@ -1,16 +1,9 @@
-"use client";
-
-import { signIn } from "next-auth/react";
+import LoginScreen from "@/components/auth/LoginScreen"
 
 export default function LoginPage() {
   return (
-    <div className="flex h-screen items-center justify-center">
-      <button
-        onClick={() => signIn("google")}
-        className="rounded bg-black px-4 py-2 text-white"
-      >
-        Sign in with Google
-      </button>
+    <div className="h-screen bg-zinc-950 text-zinc-100 flex">
+      <LoginScreen />
     </div>
-  );
+  )
 }

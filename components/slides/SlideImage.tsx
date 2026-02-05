@@ -10,13 +10,26 @@ type SlideImageProps = {
   seed?: number | string
 }
 
-async function preload(url: string) {
-  await new Promise<void>((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => resolve()
-    img.onerror = () => reject(new Error("Image failed to load"))
-    img.src = url
-  })
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+// URL hemen hazır olmayabiliyor (CDN gecikmesi vs.)
+async function waitForImage(url: string, tries = 6, delayMs = 350) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const img = new Image()
+        img.onload = () => resolve()
+        img.onerror = () => reject(new Error("Image failed to load"))
+        img.src = url
+      })
+      return true
+    } catch {
+      await sleep(delayMs)
+    }
+  }
+  return false
 }
 
 export function SlideImage({
@@ -29,21 +42,27 @@ export function SlideImage({
   const [loading, setLoading] = useState(false)
   const [localImageUrl, setLocalImageUrl] = useState<string | undefined>(imageUrl)
 
-  const hasGeneratedRef = useRef(false)
-  const lastPromptRef = useRef<string>("")
-
-  // Parent'tan imageUrl gelirse sync
+  const onGeneratedRef = useRef<typeof onGenerated>(onGenerated)
   useEffect(() => {
-    if (imageUrl) setLocalImageUrl(imageUrl)
+    onGeneratedRef.current = onGenerated
+  }, [onGenerated])
+
+  const lastPromptRef = useRef<string>("")
+  const generatedKeyRef = useRef<string>("")
+
+  // ✅ Parent'tan gelen imageUrl her değiştiğinde (undefined dahil) local'i sync et
+  useEffect(() => {
+    setLocalImageUrl(imageUrl)
   }, [imageUrl])
 
-  // Prompt değiştiyse yeniden üretime izin ver
+  // Prompt değiştiyse yeniden üretime izin ver + local görseli temizle
   useEffect(() => {
-    if (lastPromptRef.current && lastPromptRef.current !== imagePrompt) {
-      hasGeneratedRef.current = false
+    const p = (imagePrompt ?? "").trim()
+    if (lastPromptRef.current && lastPromptRef.current !== p) {
+      generatedKeyRef.current = ""
       setLocalImageUrl(undefined)
     }
-    lastPromptRef.current = imagePrompt
+    lastPromptRef.current = p
   }, [imagePrompt])
 
   const resolvedSeed = useMemo(() => {
@@ -52,7 +71,6 @@ export function SlideImage({
       const n = parseInt(seed, 10)
       if (!Number.isNaN(n)) return n
     }
-    // seed yoksa prompt hash
     let h = 0
     for (let i = 0; i < imagePrompt.length; i++) h = (h * 31 + imagePrompt.charCodeAt(i)) >>> 0
     return h
@@ -60,63 +78,63 @@ export function SlideImage({
 
   useEffect(() => {
     if (!enableAI) return
-    if (!imagePrompt) return
+
+    const prompt = (imagePrompt ?? "").trim()
+    if (!prompt) return
+
+    // local’de görsel varsa üretme
     if (localImageUrl) return
-    if (hasGeneratedRef.current) return
 
-    hasGeneratedRef.current = true
+    const key = `${prompt}::${resolvedSeed}`
+    if (generatedKeyRef.current === key) return
+    generatedKeyRef.current = key
 
-    async function generateWithRetry() {
+    const controller = new AbortController()
+
+    async function generateOnce(seedToUse: number) {
+      const res = await fetch("/api/image/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, seed: seedToUse }),
+        signal: controller.signal,
+      })
+      if (!res.ok) throw new Error("Image generation failed")
+      return res.json() as Promise<{ imageUrl: string }>
+    }
+
+    async function run() {
       setLoading(true)
-
       try {
-        // 1. deneme
-        const res1 = await fetch("/api/image/generate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt: imagePrompt,
-            seed: resolvedSeed,
-            // model: "flux", // istersen aç (desteklenirse)
-          }),
-        })
-        if (!res1.ok) throw new Error("Image generation failed")
-        const data1 = await res1.json()
+        const data1 = await generateOnce(Number(resolvedSeed))
 
-        // Görsel gerçekten yükleniyor mu? (bazı placeholder/bozuk url'lerde yakalar)
-        await preload(data1.imageUrl)
+        // ✅ önce göster + parent’a bildir (save zinciri çalışsın)
+        if (!controller.signal.aborted) {
+          setLocalImageUrl(data1.imageUrl)
+          onGeneratedRef.current?.(data1.imageUrl)
+        }
 
-        setLocalImageUrl(data1.imageUrl)
-        onGenerated?.(data1.imageUrl)
+        // ✅ sonra arka planda yüklenmesini bekle (generate retry değil)
+        await waitForImage(data1.imageUrl)
       } catch (e1) {
-        // 2. deneme (seed’i kaydır)
         try {
-          const res2 = await fetch("/api/image/generate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              prompt: imagePrompt,
-              seed: Number(resolvedSeed) + 99991,
-            }),
-          })
-          if (!res2.ok) throw new Error("Retry image generation failed")
-          const data2 = await res2.json()
-
-          await preload(data2.imageUrl)
-
-          setLocalImageUrl(data2.imageUrl)
-          onGenerated?.(data2.imageUrl)
+          const data2 = await generateOnce(Number(resolvedSeed) + 99991)
+          if (!controller.signal.aborted) {
+            setLocalImageUrl(data2.imageUrl)
+            onGeneratedRef.current?.(data2.imageUrl)
+          }
+          await waitForImage(data2.imageUrl)
         } catch (e2) {
           console.error("Image generate error:", e1, e2)
-          hasGeneratedRef.current = false
+          generatedKeyRef.current = ""
         }
       } finally {
-        setLoading(false)
+        if (!controller.signal.aborted) setLoading(false)
       }
     }
 
-    generateWithRetry()
-  }, [enableAI, imagePrompt, localImageUrl, onGenerated, resolvedSeed])
+    run()
+    return () => controller.abort()
+  }, [enableAI, imagePrompt, localImageUrl, resolvedSeed])
 
   if (loading) {
     return <div className="mt-4 h-40 w-full animate-pulse rounded-xl bg-gray-200" />

@@ -1,3 +1,5 @@
+// /prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -63,20 +65,37 @@ model VerificationToken {
 }
 
 model Document {
-  id        String   @id @default(cuid())
-  title     String
-  content   Json?
-  themeName String?
+  id           String   @id @default(cuid())
+  title        String
 
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /**
+   * Case uyumu:
+   * Document = Artifact container
+   * "slides" artifact saklıyoruz (ileride başka artifact türü eklenebilir)
+   */
+  artifactType String   @default("slides") // "slides" | "essay" ...
+  version      Int      @default(1)
 
-  messages  ChatMessage[]
+  /**
+   * JSON içerik:
+   * {
+   *   artifact: { id, type:"slides", title, version, state:{deck, history}, meta }
+   * }
+   */
+  content      Json?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  themeName    String?  // UI theme; artifact içinde de tutulabilir ama şimdilik kalsın
+
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  messages     ChatMessage[]
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@index([userId])
+  @@index([artifactType])
 }
 
 model ChatMessage {

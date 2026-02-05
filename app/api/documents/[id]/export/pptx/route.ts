@@ -4,8 +4,7 @@ import { auth } from "@/lib/auth"
 import { getThemeByName } from "@/lib/slideThemes"
 
 import { extractSlidesFromContent, getExportDebugInfo } from "@/lib/export/slidesExtract"
-import { buildSlidesHtml } from "@/lib/export/pdfTemplate"
-import { renderHtmlToPdfBuffer } from "@/lib/export/puppeteerPdf"
+import { buildPptxBuffer } from "@/lib/export/pptxTemplate"
 import { toDataUri } from "@/lib/export/imageData"
 
 export const runtime = "nodejs"
@@ -40,35 +39,38 @@ export async function GET(req: Request, context: { params: Promise<{ id: string 
     )
   }
 
-  // ✅ PDF: görselleri data-uri embed et (daha stabil export)
-  const slidesWithEmbeddedImages = await Promise.all(
+  // ✅ PPTX: görselleri data-uri yapıp template’e ver (fetch'e bağımlılık azalır)
+  const slidesPrepared = await Promise.all(
     slides.map(async (s: any) => {
       const url = typeof s?.imageUrl === "string" ? s.imageUrl : ""
       if (!url) return s
       const data = await toDataUri(req, url)
-      return { ...s, imageUrl: data || url }
+      return { ...s, imageData: data || "" }
     })
   )
 
   const theme = getThemeByName(doc.themeName ?? "Default")
-  const html = buildSlidesHtml(slidesWithEmbeddedImages, theme)
 
   try {
-    const pdfBuffer = await renderHtmlToPdfBuffer(html)
+    const buffer = await buildPptxBuffer({
+      slides: slidesPrepared,
+      theme,
+      deckTitle: doc.title ?? "Sunum",
+    })
 
-    const filename = safeFilename(doc.title) + ".pdf"
+    const filename = safeFilename(doc.title) + ".pptx"
     const encodedFilename = encodeURIComponent(filename)
 
-    return new NextResponse(pdfBuffer, {
+    return new NextResponse(buffer, {
       headers: {
-        "Content-Type": "application/pdf",
+        "Content-Type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "Content-Disposition": `attachment; filename*=UTF-8''${encodedFilename}`,
         "Cache-Control": "no-store",
       },
     })
   } catch (err: any) {
     return NextResponse.json(
-      { error: "PDF export failed", message: String(err?.message ?? err) },
+      { error: "PPTX export failed", message: String(err?.message ?? err) },
       { status: 500 }
     )
   }
