@@ -1,100 +1,87 @@
+// /app/api/slides/regenerate/route.ts
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
+import { db, schema } from "@/db"
+import { and, eq } from "drizzle-orm"
 import { regenerateSlideText, regenerateSlideImagePrompt } from "@/lib/groq"
 import type { Slide } from "@/types/slide"
+import {
+  buildSlidesArtifactEnvelope,
+  extractSlidesStateFromDoc,
+  pushSnapshot,
+} from "@/lib/artifacts/slidesArtifact"
 
-/**
- * Body:
- * {
- *   documentId: string
- *   slideId: string
- *   mode: "text" | "imagePrompt"
- * }
- */
 export async function POST(req: Request) {
   const session = await auth()
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  }
+  if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
   const body = await req.json().catch(() => null)
   const { documentId, slideId, mode } = body ?? {}
 
-  if (!documentId || !slideId || !mode) {
+  if (!documentId || !slideId || (mode !== "text" && mode !== "imagePrompt")) {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 })
   }
 
-  const doc = await prisma.document.findFirst({
-    where: { id: documentId, userId: session.user.id },
-    select: { id: true, content: true, title: true, themeName: true, version: true },
-  })
+  const rows = await db
+    .select({
+      id: schema.documents.id,
+      title: schema.documents.title,
+      themeName: schema.documents.themeName,
+      content: schema.documents.content,
+      version: schema.documents.version,
+      userId: schema.documents.userId,
+    })
+    .from(schema.documents)
+    .where(and(eq(schema.documents.id, documentId), eq(schema.documents.userId, session.user.id)))
+    .limit(1)
 
-  const content = doc?.content as any
+  const doc = rows[0]
+  if (!doc) return NextResponse.json({ error: "Not found" }, { status: 404 })
 
-  if (!doc || !content || typeof content !== "object" || !content.artifact) {
-    return NextResponse.json({ error: "Artifact not found" }, { status: 404 })
-  }
-
-  const artifact = content.artifact as any
-  const deck = artifact.state.deck
+  const extracted = extractSlidesStateFromDoc(doc as any)
+  const deck = extracted.state.deck
+  const meta = deck.meta
   const slides: Slide[] = Array.isArray(deck.slides) ? deck.slides : []
 
-  const index = slides.findIndex((s) => s.id === slideId)
-  if (index === -1) {
-    return NextResponse.json({ error: "Slide not found" }, { status: 404 })
-  }
+  const idx = slides.findIndex((s) => s.id === slideId)
+  if (idx === -1) return NextResponse.json({ error: "Slide not found" }, { status: 404 })
 
-  const targetSlide = slides[index]
+  const target = slides[idx]
 
-  // 🔹 LLM CALL
-  let updatedFields: Partial<Slide> = {}
+  let patch: Partial<Slide> = {}
+  if (mode === "text") patch = await regenerateSlideText(target, meta)
+  if (mode === "imagePrompt") patch = await regenerateSlideImagePrompt(target, meta)
 
-  if (mode === "text") {
-    updatedFields = await regenerateSlideText(targetSlide)
-  }
+  const nextSlides = slides.map((s, i) => (i === idx ? { ...s, ...patch } : s))
+  const nextDeck = { ...deck, slides: nextSlides }
 
-  if (mode === "imagePrompt") {
-    updatedFields = await regenerateSlideImagePrompt(targetSlide)
-  }
+  const nextState = pushSnapshot({ ...extracted.state, deck: nextDeck }, extracted.state.deck)
 
-  const nextSlides = slides.map((s, i) =>
-    i === index ? { ...s, ...updatedFields } : s
-  )
-
-  // 🔹 HISTORY + VERSION
-  const nextContent = {
-    artifact: {
-      ...artifact,
-      version: artifact.version + 1,
-      meta: {
-        ...artifact.meta,
-        lastAction: "regenerate",
-      },
-      state: {
-        deck: {
-          ...deck,
-          slides: nextSlides,
-        },
-        history: [
-          deck,
-          ...(artifact.state.history ?? []),
-        ].slice(0, 20),
-      },
-      updatedAt: new Date().toISOString(),
-    },
-  }
-
-  await prisma.document.update({
-    where: { id: doc.id },
-    data: {
-      content: JSON.parse(JSON.stringify(nextContent)),
-      version: { increment: 1 },
-    },
+  const env = buildSlidesArtifactEnvelope({
+    docId: doc.id,
+    title: nextDeck.title,
+    themeName: nextDeck.themeName,
+    state: nextState,
+    prevArtifact: extracted.artifact,
+    bumpVersion: true,
+    lastAction: "regenerate",
   })
 
+  const nextVersion = (doc.version ?? 1) + 1
+
+  await db
+    .update(schema.documents)
+    .set({
+      content: env as any,
+      version: nextVersion,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(schema.documents.id, doc.id), eq(schema.documents.userId, session.user.id)))
+
   return NextResponse.json({
-    slide: nextSlides[index],
-    version: artifact.version + 1,
+    slide: nextSlides[idx],
+    version: nextVersion,
+    pastLen: nextState.past.length,
+    futureLen: nextState.future.length,
   })
 }

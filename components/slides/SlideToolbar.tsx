@@ -1,4 +1,4 @@
-// /components/slides/SlideToolbar.tsx
+// /home/hacer/Desktop/slied_project/slide-ai/components/slides/SlideToolbar.tsx
 "use client"
 
 interface Props {
@@ -10,16 +10,17 @@ interface Props {
   onRegenerateText: () => void
   onRegenerateImage: () => void
 
-  // ✅ EXPORT
   onExportPdf: () => void
   onExportPptx: () => void
   isExportingPdf: boolean
   isExportingPptx: boolean
 
-  // ✅ UNDO
   onUndo: () => void
+  onRedo: () => void
   canUndo: boolean
+  canRedo: boolean
   isUndoing: boolean
+  isRedoing: boolean
 
   isSaving: boolean
   isDirty: boolean
@@ -41,8 +42,11 @@ export default function SlideToolbar({
   isExportingPptx,
 
   onUndo,
+  onRedo,
   canUndo,
+  canRedo,
   isUndoing,
+  isRedoing,
 
   isSaving,
   isDirty,
@@ -54,7 +58,6 @@ export default function SlideToolbar({
       <button onClick={onMoveUp} className="btn">⬆ Up</button>
       <button onClick={onMoveDown} className="btn">⬇ Down</button>
 
-      {/* ✅ UNDO */}
       <button
         onClick={onUndo}
         disabled={!canUndo || isUndoing}
@@ -64,10 +67,18 @@ export default function SlideToolbar({
         {isUndoing ? "↩ Undo..." : "↩ Undo"}
       </button>
 
+      <button
+        onClick={onRedo}
+        disabled={!canRedo || isRedoing}
+        className="btn disabled:opacity-50"
+        title={canRedo ? "İleri al" : "İleri alınacak kayıt yok"}
+      >
+        {isRedoing ? "↪ Redo..." : "↪ Redo"}
+      </button>
+
       <button onClick={onRegenerateText} className="btn">♻️ Regenerate Text</button>
       <button onClick={onRegenerateImage} className="btn">🖼 Regenerate Image</button>
 
-      {/* ✅ EXPORTS */}
       <button
         onClick={onExportPdf}
         disabled={isExportingPdf}
@@ -86,7 +97,6 @@ export default function SlideToolbar({
         {isExportingPptx ? "📦 PPTX..." : "📦 PPTX Export"}
       </button>
 
-      {/* SAVE */}
       <button
         onClick={onSave}
         disabled={isSaving || !isDirty}

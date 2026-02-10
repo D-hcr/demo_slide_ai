@@ -7,7 +7,7 @@ type AnySlide = {
   title?: string
   bullets?: string[]
   imageUrl?: string
-  imageData?: string // ✅ route'tan embed data gelebilir
+  imageData?: string
   imagePrompt?: string
   layout?: "text-left" | "image-left" | "full-image" | string
 }
@@ -23,23 +23,6 @@ function hex(input: string | undefined | null, fallback: string) {
   return /^[0-9a-fA-F]{6}$/.test(v) ? v : fallback
 }
 
-async function fetchImageAsDataUri(url: string, timeoutMs = 20_000): Promise<string | null> {
-  if (!url) return null
-  try {
-    const controller = new AbortController()
-    const t = setTimeout(() => controller.abort(), timeoutMs)
-    const res = await fetch(url, { signal: controller.signal })
-    clearTimeout(t)
-    if (!res.ok) return null
-    const ct = res.headers.get("content-type") || "image/jpeg"
-    const buf = Buffer.from(await res.arrayBuffer())
-    const b64 = buf.toString("base64")
-    return `data:${ct};base64,${b64}`
-  } catch {
-    return null
-  }
-}
-
 function fitFontSizeByLength(text: string, base: number, min: number) {
   const n = (text || "").length
   if (n <= 24) return base
@@ -49,10 +32,17 @@ function fitFontSizeByLength(text: string, base: number, min: number) {
 }
 
 function opacityToPptxTransparency(opacity: number) {
-  // pptxgenjs transparency: 0 = opak, 100 = tamamen şeffaf
-  // opacity: 0..1 (1 opak)
+  // pptxgenjs: 0 = opak, 100 = şeffaf
   const clamped = Math.max(0, Math.min(1, opacity))
   return Math.round((1 - clamped) * 100)
+}
+
+function normalizeLayoutForExport(s: AnySlide) {
+  const layout = (s?.layout as string) || "text-left"
+  const hasImage = !!(s?.imageData && s.imageData.startsWith("data:"))
+  if (layout === "full-image" && !hasImage) return "text-left"
+  if (layout === "image-left" || layout === "text-left" || layout === "full-image") return layout
+  return "text-left"
 }
 
 export async function buildPptxBuffer(args: {
@@ -66,14 +56,13 @@ export async function buildPptxBuffer(args: {
   const W = 13.333
   const H = 7.5
 
-  // ✅ NEW THEME MODEL: palette’ten oku (fallback: eski export* alanları varsa onları da destekle)
   const bg = hex(args.theme.palette?.background ?? (args.theme as any).exportBackground, "FFFFFF")
   const fg = hex(args.theme.palette?.foreground ?? (args.theme as any).exportText, "111111")
   const accent = hex(args.theme.palette?.accent ?? (args.theme as any).exportAccent, "2563EB")
   const muted = hex(args.theme.palette?.muted ?? "64748b", "64748b")
 
-  // ✅ overlay tamamen senin kontrolünde
-  const overlayEnabled = !!args.theme.overlay?.enabled
+  const allowOverlay = args.theme.exportRules?.pptx?.allowOverlay !== false
+  const overlayEnabled = allowOverlay && !!(args.theme.overlay?.enabled || args.theme.imageStyle?.overlayOnImage)
   const overlayColor = hex(args.theme.overlay?.color ?? "#000000", "000000")
   const overlayOpacity =
     typeof args.theme.overlay?.opacity === "number" ? args.theme.overlay.opacity : 0.55
@@ -82,15 +71,14 @@ export async function buildPptxBuffer(args: {
     const s = args.slides[idx]
     const slide = pptx.addSlide()
 
-    // ✅ Tema background
     slide.background = { color: bg }
 
     const title = String(s?.title ?? "").trim() || "Slide Title"
     const bullets = clampBullets(s?.bullets)
-    const layout = (s?.layout as any) || "text-left"
+    const layout = normalizeLayoutForExport(s)
     const titleSize = fitFontSizeByLength(title, 36, 24)
 
-    // üst accent bar + meta (radius yok)
+    // accent bar + meta
     slide.addShape(pptx.ShapeType.roundRect as any, {
       x: 0.85,
       y: 0.5,
@@ -111,20 +99,16 @@ export async function buildPptxBuffer(args: {
       transparency: 45,
     })
 
+    const dataUri = (s?.imageData && s.imageData.startsWith("data:")) ? s.imageData : null
+
     // =========================
     // FULL IMAGE
     // =========================
     if (layout === "full-image") {
-      const dataUri =
-        (s?.imageData && s.imageData.startsWith("data:") ? s.imageData : null) ||
-        (typeof s?.imageUrl === "string" ? await fetchImageAsDataUri(s.imageUrl) : null)
-
-      // Görsel varsa bas, yoksa sadece theme bg kalsın (koyu block yok)
       if (dataUri) {
         slide.addImage({ data: dataUri, x: 0, y: 0, w: W, h: H })
       }
 
-      // ✅ overlay sadece enabled ise
       if (overlayEnabled) {
         slide.addShape(pptx.ShapeType.rect, {
           x: 0,
@@ -136,7 +120,6 @@ export async function buildPptxBuffer(args: {
         })
       }
 
-      // Full-image üst yazılar her zaman beyaz (okunabilirlik)
       slide.addText(title, {
         x: 0.95,
         y: 1.25,
@@ -198,7 +181,7 @@ export async function buildPptxBuffer(args: {
     const textX = leftIsImage ? 0.85 + imgW + 0.6 : 0.85
     const textW = leftIsImage ? W - textX - 0.85 : W - 0.85 - imgW - 0.6 - 0.85
 
-    // image card bg (radius yok)
+    // image card bg
     slide.addShape(pptx.ShapeType.roundRect as any, {
       x: imgX,
       y: imgY,
@@ -207,10 +190,6 @@ export async function buildPptxBuffer(args: {
       fill: { color: "F4F4F5" },
       line: { color: "E4E4E7" },
     } as any)
-
-    const dataUri =
-      (s?.imageData && s.imageData.startsWith("data:") ? s.imageData : null) ||
-      (typeof s?.imageUrl === "string" ? await fetchImageAsDataUri(s.imageUrl) : null)
 
     if (dataUri) {
       slide.addImage({ data: dataUri, x: imgX, y: imgY, w: imgW, h: imgH })

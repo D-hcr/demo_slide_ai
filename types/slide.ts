@@ -1,4 +1,10 @@
-// /types/slide.ts
+// /home/hacer/Desktop/slied_project/slide-ai/types/slide.ts
+
+export type DeckMeta = {
+  topic?: string
+  audience?: string
+  tone?: string
+}
 
 export interface Slide {
   id: string
@@ -19,34 +25,33 @@ export interface SlideDeck {
   title: string
   slides: Slide[]
   themeName: string
-  history?: SlideDeck[]
+  meta?: DeckMeta // ✅ NEW
 }
 
 export interface SlideDeckResponse {
-  id: string
+  id?: string
   title?: string
   slides?: Slide[]
-  content?: Slide[]
+  content?: any
   themeName?: string
-  history?: SlideDeck[]
-  historyLen?: number
+  meta?: DeckMeta // ✅ NEW
+  pastLen?: number
+  futureLen?: number
+  version?: number
 }
 
 /** ✅ NEW THEME MODEL (UI + Export ortak) */
 export type SlideTheme = {
   name: string
 
-  // Tailwind class (UI için)
   backgroundClass: string
   textClass: string
   accentClass: string
 
-  // Typography (UI)
   titleSize: string
   bulletSize: string
   fontFamily: string
 
-  // Hex palette (Export + UI inline style için)
   palette: {
     background: string
     foreground: string
@@ -54,7 +59,6 @@ export type SlideTheme = {
     muted: string
   }
 
-  // Gradient opsiyonel
   gradient?: {
     enabled: boolean
     direction: "top-bottom" | "bottom-top" | "left-right" | "right-left"
@@ -62,14 +66,12 @@ export type SlideTheme = {
     to: string
   }
 
-  // Overlay opsiyonel (full-image vb)
   overlay?: {
     enabled: boolean
     color: string
-    opacity: number // 0..1
+    opacity: number
   }
 
-  // İleri seviye rules
   imageStyle?: {
     radius: number
     shadow: boolean
@@ -82,19 +84,20 @@ export type SlideTheme = {
   }
 }
 
-/** Artifact types (aynı kalabilir) */
 export type ArtifactType = "slides"
 export type ArtifactStatus = "ready" | "loading" | "error"
 
 export type ArtifactMeta = {
   status?: ArtifactStatus
   error?: string | null
-  lastAction?: "create" | "update" | "regenerate" | "manual-edit" | "export" | "undo" | null
+  lastAction?: "create" | "update" | "regenerate" | "manual-edit" | "export" | "undo" | "redo" | null
 }
 
 export type SlidesArtifactState = {
   deck: SlideDeck
-  history?: SlideDeck[]
+  past?: SlideDeck[] // ✅ undo stack
+  future?: SlideDeck[] // ✅ redo stack
+  history?: SlideDeck[] // backward compat
 }
 
 export type SlidesArtifact = {

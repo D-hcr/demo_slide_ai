@@ -27,6 +27,15 @@ function buildBgStyle(theme: SlideTheme): React.CSSProperties {
   }
 }
 
+function normalizeLayout(slide: Slide): Slide["layout"] {
+  const layout = slide.layout ?? "text-left"
+  const hasImage = !!(slide.imagePrompt && slide.imagePrompt.trim())
+
+  // ✅ Step 8: full-image ama image yoksa UI kırılmasın
+  if (layout === "full-image" && !hasImage) return "text-left"
+  return layout
+}
+
 export default function ActiveSlideView({
   slide,
   theme,
@@ -36,49 +45,47 @@ export default function ActiveSlideView({
   theme: SlideTheme
   onChange: (updated: Slide) => void
 }) {
-  const layout = slide.layout ?? "text-left"
-  const hasImage = !!slide.imagePrompt
+  const layout = normalizeLayout(slide)
+  const hasImage = !!(slide.imagePrompt && slide.imagePrompt.trim())
 
-  const ImageBlock = (
-    <div className="w-[44%]">
-      <div
-        className="h-full overflow-hidden border"
-        style={{
-          borderRadius: theme.imageStyle?.radius ?? 20,
-          borderColor: "rgba(0,0,0,0.10)",
-          background: "rgba(0,0,0,0.05)",
-        }}
-      >
-        {hasImage ? (
-          <div className="h-full p-3">
-            <SlideImage
-              imagePrompt={slide.imagePrompt}
-              imageUrl={slide.imageUrl}
-              seed={slide.id}
-              onGenerated={(url) => onChange({ ...slide, imageUrl: url })}
-            />
-          </div>
-        ) : (
-          <div className="h-full flex items-center justify-center p-8 text-center">
-            <div>
-              <div className="text-sm font-semibold opacity-70">Görsel yok</div>
-              <div className="text-xs opacity-50 mt-1">
-                Image prompt ekleyip “Regenerate Image” ile oluştur.
+  const ImageBlock =
+    layout === "full-image" ? null : (
+      <div className="w-[44%]">
+        <div
+          className="h-full overflow-hidden border"
+          style={{
+            borderRadius: theme.imageStyle?.radius ?? 20,
+            borderColor: "rgba(0,0,0,0.10)",
+            background: "rgba(0,0,0,0.05)",
+          }}
+        >
+          {hasImage ? (
+            <div className="h-full p-3">
+              <SlideImage
+                imagePrompt={slide.imagePrompt}
+                imageUrl={slide.imageUrl}
+                seed={slide.id}
+                onGenerated={(url) => onChange({ ...slide, imageUrl: url })}
+              />
+            </div>
+          ) : (
+            <div className="h-full flex items-center justify-center p-8 text-center">
+              <div>
+                <div className="text-sm font-semibold opacity-70">Görsel yok</div>
+                <div className="text-xs opacity-50 mt-1">
+                  Image prompt ekleyip “AI Prompt” veya “Görseli Yenile” ile oluştur.
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
-    </div>
-  )
+    )
 
   const TextBlock = (
     <div className="flex-1 min-w-0">
       <div className="flex items-center gap-3 mb-6">
-        <div
-          className="h-[10px] w-14 rounded-full"
-          style={{ background: theme.palette.accent }}
-        />
+        <div className="h-[10px] w-14 rounded-full" style={{ background: theme.palette.accent }} />
         <div className="text-xs opacity-50">Slide AI</div>
       </div>
 

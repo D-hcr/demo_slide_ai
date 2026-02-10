@@ -1,7 +1,8 @@
+// /home/hacer/Desktop/slied_project/slide-ai/app/HomeClient.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { SlideDeck } from "@/types/slide";
+import type { SlideDeck, DeckMeta } from "@/types/slide";
 
 import ChatWorkspace from "@/components/chat/ChatWorkspace";
 import SlideWorkspace from "@/components/slides/SlideWorkspace";
@@ -12,8 +13,9 @@ type SlideDeckResponse = {
   id?: string;
   title?: string;
   slides?: any[];
-  content?: any; // ✅ artifact envelope object da olabilir
+  content?: any;
   themeName?: string;
+  meta?: DeckMeta; // ✅ NEW
   updatedAt?: string;
 };
 
@@ -50,11 +52,17 @@ function normalizeDeck(raw: SlideDeckResponse): SlideDeck | null {
     typeof raw.content === "object" &&
     (raw.content as any).artifact?.state?.deck?.title;
 
+  const metaFromArtifact =
+    raw.content &&
+    typeof raw.content === "object" &&
+    (raw.content as any).artifact?.state?.deck?.meta;
+
   return {
     id,
     title: raw.title ?? titleFromArtifact ?? "Yeni Sunum",
     slides: slides as any[],
     themeName: raw.themeName ?? themeFromArtifact ?? "Default",
+    meta: (raw.meta ?? metaFromArtifact ?? undefined) as any, // ✅ NEW
   };
 }
 
@@ -69,14 +77,8 @@ export default function HomeClient({ session }: { session: any }) {
   const didInitRef = useRef(false);
   const lastLoadedDeckIdRef = useRef<string | null>(null);
 
-  // ✅ SADECE slayt varsa sağ panel açılsın
   const hasSlides = useMemo(() => {
-    return (
-      !!deckId &&
-      !!deck &&
-      Array.isArray(deck.slides) &&
-      deck.slides.length > 0
-    );
+    return !!deckId && !!deck && Array.isArray(deck.slides) && deck.slides.length > 0;
   }, [deckId, deck]);
 
   async function refreshPresentations() {
@@ -113,12 +115,7 @@ export default function HomeClient({ session }: { session: any }) {
     const fixed = normalizeDeck(raw);
     if (!fixed) return;
 
-    if (
-      lastLoadedDeckIdRef.current === fixed.id &&
-      deckId === fixed.id &&
-      deck
-    )
-      return;
+    if (lastLoadedDeckIdRef.current === fixed.id && deckId === fixed.id && deck) return;
 
     lastLoadedDeckIdRef.current = fixed.id;
 
@@ -139,27 +136,23 @@ export default function HomeClient({ session }: { session: any }) {
 
     lastLoadedDeckIdRef.current = fixed.id;
 
-    // ✅ yeni sunum: deck var ama slides boş => sağ panel hiç görünmez
     setDeckId(fixed.id);
     setDeck({
       ...fixed,
       slides: [],
       title: fixed.title ?? "Yeni Sunum",
+      meta: fixed.meta ?? {},
     });
     setDeckVersion((v) => v + 1);
   }
 
   async function handleDuplicate(id: string) {
-    const res = await fetch(`/api/documents/${id}/duplicate`, {
-      method: "POST",
-    });
+    const res = await fetch(`/api/documents/${id}/duplicate`, { method: "POST" });
     if (!res.ok) return;
 
     const created = (await res.json()) as { id: string };
     await refreshPresentations();
-    if (created?.id) {
-      await loadDeckById(created.id);
-    }
+    if (created?.id) await loadDeckById(created.id);
   }
 
   useEffect(() => {
@@ -262,7 +255,6 @@ export default function HomeClient({ session }: { session: any }) {
             }}
           />
 
-          {/* ✅ Sağ panel sadece slayt varsa mount olur */}
           {hasSlides && deck && deckId ? (
             <div className="flex-1 opacity-100 transition-all duration-700 ease-in-out overflow-hidden">
               <SlideWorkspace

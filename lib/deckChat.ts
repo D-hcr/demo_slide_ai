@@ -1,5 +1,5 @@
-// /lib/deckChat.ts
-import type { SlideDeck as AppDeck, Slide as AppSlide } from "@/types/slide"
+// /home/hacer/Desktop/slied_project/slide-ai/lib/deckChat.ts
+import type { SlideDeck as AppDeck, Slide as AppSlide, DeckMeta } from "@/types/slide"
 import { runDeckLLM } from "@/lib/groq"
 
 type Role = "user" | "assistant" | "system"
@@ -14,6 +14,22 @@ type RunArgs = {
 type RunResult = {
   assistantText: string
   updatedDeck?: AppDeck | null
+}
+
+function metaLine(meta?: DeckMeta) {
+  const t = meta?.topic?.trim()
+  const a = meta?.audience?.trim()
+  const tone = meta?.tone?.trim()
+  if (!t && !a && !tone) return ""
+  return [
+    "META:",
+    t ? `- Topic: ${t}` : null,
+    a ? `- Audience: ${a}` : null,
+    tone ? `- Tone: ${tone}` : null,
+    "",
+  ]
+    .filter(Boolean)
+    .join("\n")
 }
 
 /** ✅ Basit komut çözümleyici (LLM JSON vermezse bile çalışır) */
@@ -37,6 +53,10 @@ function parseSimpleCommand(text: string) {
 }
 
 function getDeckTopic(deck: AppDeck) {
+  // ✅ meta.topic varsa onu baz al
+  const metaTopic = deck.meta?.topic?.trim()
+  if (metaTopic) return metaTopic.slice(0, 220)
+
   const base = deck.title?.trim() || "Sunum"
   const s1 = deck.slides?.[0]?.title ? ` / ${deck.slides[0].title}` : ""
   const s2 = deck.slides?.[1]?.title ? ` / ${deck.slides[1].title}` : ""
@@ -77,12 +97,10 @@ function normalizeSlideLike(s: any, fallbackId: string): AppSlide {
   }
 }
 
-/** ✅ LLM çağrısı: Groq ile JSON döndüren gerçek bağlantı */
 async function callModelJSON(prompt: string): Promise<any> {
   return runDeckLLM(prompt)
 }
 
-/** ✅ LLM response bazen code fence vs döner: güvenli JSON çekme */
 function extractLikelyJson(text: string) {
   const t = (text ?? "").trim()
   const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i)
@@ -94,23 +112,13 @@ function extractLikelyJson(text: string) {
   return t
 }
 
-/** ✅ runDeckLLM string döndürüyorsa da parse etmeye çalış */
 async function callModelJSONSafe(prompt: string): Promise<any> {
   const out = await callModelJSON(prompt)
-
-  // Eğer runDeckLLM zaten obje döndürüyorsa:
   if (out && typeof out === "object") return out
-
-  // Eğer string döndürüyorsa:
   if (typeof out === "string") {
     const jsonText = extractLikelyJson(out)
-    try {
-      return JSON.parse(jsonText)
-    } catch {
-      throw new Error("LLM JSON parse edilemedi.")
-    }
+    return JSON.parse(jsonText)
   }
-
   return out
 }
 
@@ -120,9 +128,12 @@ export async function runDeckChatCommand(args: RunArgs): Promise<RunResult> {
   const safeDeck: AppDeck = {
     ...deck,
     slides: Array.isArray(deck.slides) ? deck.slides : [],
+    meta: deck.meta,
   }
 
   const simple = parseSimpleCommand(userText)
+  const topic = getDeckTopic(safeDeck)
+  const metaCtx = metaLine(safeDeck.meta)
 
   // 1) Silme: deterministik
   if (simple.slideNo && simple.wantsDelete) {
@@ -142,12 +153,11 @@ export async function runDeckChatCommand(args: RunArgs): Promise<RunResult> {
 
   // 2) Tüm başlıkları güncelle
   if (simple.wantsAllTitles) {
-    const topic = getDeckTopic(safeDeck)
-
     try {
       const prompt = `
 Sen bir sunum düzenleyicisisin.
 
+${metaCtx}
 KONU: ${topic}
 
 MEVCUT SLAYTLAR:
@@ -163,8 +173,6 @@ SADECE JSON döndür:
 {
   "assistantText": "kısa açıklama",
   "updatedDeck": {
-    "title": "string (opsiyonel)",
-    "themeName": "string (opsiyonel)",
     "slides": [
       { "id": "string", "title": "string" }
     ]
@@ -180,40 +188,22 @@ SADECE JSON döndür:
         const slides = out.updatedDeck.slides.map((s: any, i: number) => {
           const incomingId = normalizeId(s?.id, safeDeck.slides[i]?.id ?? `s-${i}`)
           const old = byId.get(incomingId) ?? safeDeck.slides[i]
-
-          const merged = {
-            ...old,
-            title: typeof s?.title === "string" && s.title.trim() ? s.title : old.title,
-            id: old?.id ?? incomingId,
-          }
-
+          const merged = { ...old, title: typeof s?.title === "string" ? s.title : old.title, id: old?.id ?? incomingId }
           return normalizeSlideLike(merged, old?.id ?? incomingId)
         })
 
         return {
           assistantText: out?.assistantText || "Tüm slayt başlıklarını güncelledim.",
-          updatedDeck: {
-            ...safeDeck,
-            title: out.updatedDeck.title ?? safeDeck.title,
-            themeName: out.updatedDeck.themeName ?? safeDeck.themeName,
-            slides,
-          },
+          updatedDeck: { ...safeDeck, slides },
         }
       }
     } catch {
-      // fallback
+      // ignore
     }
 
-    // fallback: deterministik
     const base = safeDeck.title?.trim() || "Sunum"
-    const slides = safeDeck.slides.map((s, i) => ({
-      ...s,
-      title: `${base}: Bölüm ${i + 1}`,
-    }))
-    return {
-      assistantText: "Tüm slayt başlıklarını güncelledim. (fallback)",
-      updatedDeck: { ...safeDeck, slides },
-    }
+    const slides = safeDeck.slides.map((s, i) => ({ ...s, title: `${base}: Bölüm ${i + 1}` }))
+    return { assistantText: "Tüm slayt başlıklarını güncelledim. (fallback)", updatedDeck: { ...safeDeck, slides } }
   }
 
   // 3) X. slaytı güncelle
@@ -223,13 +213,13 @@ SADECE JSON döndür:
       return { assistantText: `Slayt bulunamadı (slayt: ${simple.slideNo}).`, updatedDeck: null }
     }
 
-    const topic = getDeckTopic(safeDeck)
     const target = safeDeck.slides[idx]
 
     try {
       const prompt = `
 Sen bir sunum düzenleyicisisin.
 
+${metaCtx}
 KONU: ${topic}
 
 HEDEF SLAYT (${simple.slideNo}.):
@@ -260,46 +250,34 @@ SADECE JSON döndür:
       const out = await callModelJSONSafe(prompt)
 
       if (out?.updatedSlide) {
-        const updatedRaw = {
-          ...target,
-          ...out.updatedSlide,
-          id: target.id, // ✅ asla değişmesin
-        }
-
+        const updatedRaw = { ...target, ...out.updatedSlide, id: target.id }
         const updated = normalizeSlideLike(updatedRaw, target.id)
         const slides = safeDeck.slides.map((s, i) => (i === idx ? updated : s))
 
-        return {
-          assistantText: out?.assistantText || `${simple.slideNo}. slaytı güncelledim.`,
-          updatedDeck: { ...safeDeck, slides },
-        }
+        return { assistantText: out?.assistantText || `${simple.slideNo}. slaytı güncelledim.`, updatedDeck: { ...safeDeck, slides } }
       }
     } catch {
-      // fallback
+      // ignore
     }
 
-    // fallback: basit iyileştirme
-    const slides = safeDeck.slides.map((s, i) => {
-      if (i !== idx) return s
-      return {
-        ...s,
-        title: s.title?.trim() ? s.title : `Slayt ${simple.slideNo}`,
-        bullets: Array.isArray(s.bullets) && s.bullets.length ? s.bullets : ["(İçerik güncellenecek)"],
-      }
-    })
-
-    return {
-      assistantText: `${simple.slideNo}. slaytı güncelledim. (fallback)`,
-      updatedDeck: { ...safeDeck, slides },
-    }
+    const slides = safeDeck.slides.map((s, i) =>
+      i !== idx
+        ? s
+        : {
+            ...s,
+            title: s.title?.trim() ? s.title : `Slayt ${simple.slideNo}`,
+            bullets: Array.isArray(s.bullets) && s.bullets.length ? s.bullets : ["(İçerik güncellenecek)"],
+          }
+    )
+    return { assistantText: `${simple.slideNo}. slaytı güncelledim. (fallback)`, updatedDeck: { ...safeDeck, slides } }
   }
 
   // 4) Genel: deck update dene
   try {
-    const topic = getDeckTopic(safeDeck)
     const prompt = `
 Sen bir sunum düzenleyicisisin.
 
+${metaCtx}
 KONU: ${topic}
 
 MEVCUT DECK:
@@ -322,6 +300,7 @@ JSON:
   "updatedDeck": {
     "title": "string?",
     "themeName": "string?",
+    "meta": { "topic": "string?", "audience": "string?", "tone": "string?" },
     "slides": [
       {
         "id": "string",
@@ -345,13 +324,7 @@ JSON:
       const slides = out.updatedDeck.slides.map((s: any, i: number) => {
         const incomingId = normalizeId(s?.id, safeDeck.slides[i]?.id ?? `s-${i}`)
         const old = byId.get(incomingId) ?? safeDeck.slides[i]
-
-        const merged = {
-          ...old,
-          ...s,
-          id: old?.id ?? incomingId, // ✅ id sabit
-        }
-
+        const merged = { ...old, ...s, id: old?.id ?? incomingId }
         return normalizeSlideLike(merged, old?.id ?? incomingId)
       })
 
@@ -361,6 +334,7 @@ JSON:
           ...safeDeck,
           title: out.updatedDeck.title ?? safeDeck.title,
           themeName: out.updatedDeck.themeName ?? safeDeck.themeName,
+          meta: out.updatedDeck.meta ?? safeDeck.meta,
           slides,
         },
       }
@@ -368,9 +342,6 @@ JSON:
 
     return { assistantText: out?.assistantText || "Tamam.", updatedDeck: null }
   } catch {
-    return {
-      assistantText: "Komutu aldım ama deck güncellemesi üretilemedi. (LLM JSON çıktısı gelmedi)",
-      updatedDeck: null,
-    }
+    return { assistantText: "Komutu aldım ama deck güncellemesi üretilemedi. (LLM JSON çıktısı gelmedi)", updatedDeck: null }
   }
 }

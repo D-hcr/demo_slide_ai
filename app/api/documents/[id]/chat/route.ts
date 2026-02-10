@@ -1,171 +1,15 @@
+// /app/api/documents/[id]/chat/route.ts
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
+import { db, schema } from "@/db"
+import { and, asc, desc, eq } from "drizzle-orm"
 import { runDeckChatCommand } from "@/lib/deckChat"
-
-/** -------------------------
- * Artifact helpers (backward compatible)
- * --------------------------*/
-
-function isArtifactEnvelope(content: any): boolean {
-  return !!content && typeof content === "object" && !!content.artifact
-}
-
-/**
- * ✅ Slide id’lerini normalize eder:
- * - number -> string
- * - boş -> uuid
- * - duplicate -> uuid (kritik fix)
- */
-function normalizeSlidesArray(input: any): { slides: any[]; changed: boolean } {
-  const arr = Array.isArray(input) ? input : []
-  let changed = false
-
-  const used = new Set<string>()
-
-  const slides = arr.map((s, idx) => {
-    let id = s?.id
-
-    // number -> string
-    if (typeof id === "number") {
-      id = String(id)
-      changed = true
-    }
-
-    // string trim
-    if (typeof id === "string") {
-      const trimmed = id.trim()
-      if (trimmed !== id) changed = true
-      id = trimmed
-    }
-
-    // boş/invalid -> uuid
-    const idOk = typeof id === "string" && id.length > 0
-    if (!idOk) {
-      id = crypto.randomUUID()
-      changed = true
-    }
-
-    // ✅ duplicate -> uuid
-    if (used.has(id)) {
-      id = crypto.randomUUID()
-      changed = true
-    }
-    used.add(id)
-
-    const title =
-      typeof s?.title === "string"
-        ? s.title
-        : s?.title != null
-          ? String(s.title)
-          : "Başlıksız"
-
-    const bulletsRaw = s?.bullets
-    const bullets = Array.isArray(bulletsRaw)
-      ? bulletsRaw.map((b: any) => String(b ?? "")).filter((x: string) => x.trim().length > 0)
-      : []
-
-    const imagePrompt =
-      typeof s?.imagePrompt === "string"
-        ? s.imagePrompt
-        : s?.imagePrompt != null
-          ? String(s.imagePrompt)
-          : ""
-
-    return {
-      ...s,
-      id,
-      title,
-      bullets,
-      imagePrompt,
-      _order: typeof s?._order === "number" ? s._order : idx,
-    }
-  })
-
-  return { slides, changed }
-}
-
-function extractDeck(doc: { id: string; title: string; themeName: string | null; content: any }) {
-  if (isArtifactEnvelope(doc.content)) {
-    const deck = doc.content?.artifact?.state?.deck
-    const slidesRaw = deck?.slides
-    const norm = normalizeSlidesArray(slidesRaw)
-
-    return {
-      deck: {
-        id: doc.id,
-        title: deck?.title ?? doc.title,
-        slides: norm.slides,
-        themeName: deck?.themeName ?? doc.themeName ?? "Default",
-      },
-      norm,
-      artifact: doc.content?.artifact,
-    }
-  }
-
-  const norm = normalizeSlidesArray(doc.content)
-  return {
-    deck: {
-      id: doc.id,
-      title: doc.title,
-      slides: norm.slides,
-      themeName: doc.themeName ?? "Default",
-    },
-    norm,
-    artifact: null,
-  }
-}
-
-function buildArtifactEnvelope(args: {
-  docId: string
-  title: string
-  themeName: string
-  slides: any[]
-  prevArtifact?: any | null
-  bumpVersion?: boolean
-  pushHistory?: boolean
-  lastAction?: "create" | "update" | "regenerate" | "manual-edit" | "export"
-}) {
-  const now = new Date().toISOString()
-
-  const prev = args.prevArtifact
-  const prevVersion = typeof prev?.version === "number" ? prev.version : 1
-  const nextVersion = args.bumpVersion ? prevVersion + 1 : prevVersion
-
-  const prevDeck = prev?.state?.deck
-  const prevHistory = Array.isArray(prev?.state?.history) ? prev.state.history : []
-
-  const nextDeck = {
-    id: args.docId,
-    title: args.title,
-    slides: args.slides,
-    themeName: args.themeName,
-  }
-
-  const nextHistory =
-    args.pushHistory && prevDeck
-      ? [prevDeck, ...prevHistory].slice(0, 20)
-      : prevHistory
-
-  return {
-    artifact: {
-      id: prev?.id ?? args.docId,
-      type: "slides",
-      title: args.title,
-      version: nextVersion,
-      meta: {
-        status: "ready",
-        lastAction: args.lastAction ?? (args.pushHistory ? "update" : "manual-edit"),
-        error: null,
-      },
-      state: {
-        deck: nextDeck,
-        history: nextHistory,
-      },
-      updatedAt: now,
-    },
-  }
-}
+import {
+  buildSlidesArtifactEnvelope,
+  extractSlidesStateFromDoc,
+  pushSnapshot,
+  normalizeSlidesArray,
+} from "@/lib/artifacts/slidesArtifact"
 
 export async function GET(_req: Request, context: { params: Promise<{ id: string }> }) {
   const session = await auth()
@@ -173,76 +17,47 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
 
   const { id } = await context.params
 
-  const doc = await prisma.document.findFirst({
-    where: { id, userId: session.user.id },
-    select: {
-      id: true,
-      messages: {
-        orderBy: { createdAt: "asc" },
-        select: { id: true, role: true, content: true, createdAt: true },
-      },
-      title: true,
-      content: true,
-      themeName: true,
-      updatedAt: true,
-      version: true,
-    },
-  })
+  const docs = await db
+    .select({
+      id: schema.documents.id,
+      title: schema.documents.title,
+      content: schema.documents.content,
+      themeName: schema.documents.themeName,
+      updatedAt: schema.documents.updatedAt,
+      version: schema.documents.version,
+    })
+    .from(schema.documents)
+    .where(and(eq(schema.documents.id, id), eq(schema.documents.userId, session.user.id)))
+    .limit(1)
 
+  const doc = docs[0]
   if (!doc) return NextResponse.json({ error: "Not found" }, { status: 404 })
 
-  const extracted = extractDeck(doc)
-
-  // legacy ise migrate
-  if (!isArtifactEnvelope(doc.content)) {
-    const migrated = buildArtifactEnvelope({
-      docId: doc.id,
-      title: extracted.deck.title,
-      themeName: extracted.deck.themeName,
-      slides: extracted.deck.slides,
-      prevArtifact: null,
-      bumpVersion: false,
-      pushHistory: false,
-      lastAction: "create",
+  const msgs = await db
+    .select({
+      id: schema.chatMessages.id,
+      role: schema.chatMessages.role,
+      content: schema.chatMessages.content,
+      createdAt: schema.chatMessages.createdAt,
     })
+    .from(schema.chatMessages)
+    .where(eq(schema.chatMessages.documentId, id))
+    .orderBy(asc(schema.chatMessages.createdAt))
 
-    await prisma.document.update({
-      where: { id: doc.id, userId: session.user.id },
-      data: {
-        content: JSON.parse(JSON.stringify(migrated)),
-        artifactType: "slides",
-      },
-    })
-  } else {
-    // artifact içindeki slides normalize gerekiyorsa kalıcı düzelt
-    if (extracted.norm.changed) {
-      const next = buildArtifactEnvelope({
-        docId: doc.id,
-        title: extracted.deck.title,
-        themeName: extracted.deck.themeName,
-        slides: extracted.norm.slides,
-        prevArtifact: extracted.artifact,
-        bumpVersion: false,
-        pushHistory: false,
-        lastAction: "manual-edit",
-      })
-
-      await prisma.document.update({
-        where: { id: doc.id, userId: session.user.id },
-        data: { content: JSON.parse(JSON.stringify(next)) },
-      })
-    }
-  }
+  const extracted = extractSlidesStateFromDoc(doc as any)
 
   return NextResponse.json({
-    messages: doc.messages,
+    messages: msgs,
     deck: {
       id: doc.id,
-      title: extracted.deck.title,
-      slides: extracted.deck.slides,
-      themeName: extracted.deck.themeName,
+      title: extracted.state.deck.title,
+      slides: extracted.state.deck.slides,
+      themeName: extracted.state.deck.themeName,
+      meta: extracted.state.deck.meta ?? null,
       updatedAt: doc.updatedAt,
       version: doc.version,
+      pastLen: extracted.state.past.length,
+      futureLen: extracted.state.future.length,
     },
   })
 }
@@ -259,148 +74,130 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     return NextResponse.json({ error: "Invalid text" }, { status: 400 })
   }
 
-  const doc = await prisma.document.findFirst({
-    where: { id, userId: session.user.id },
-    select: { id: true, title: true, content: true, themeName: true, version: true },
-  })
+  const docs = await db
+    .select({
+      id: schema.documents.id,
+      title: schema.documents.title,
+      content: schema.documents.content,
+      themeName: schema.documents.themeName,
+      version: schema.documents.version,
+    })
+    .from(schema.documents)
+    .where(and(eq(schema.documents.id, id), eq(schema.documents.userId, session.user.id)))
+    .limit(1)
+
+  const doc = docs[0]
   if (!doc) return NextResponse.json({ error: "Not found" }, { status: 404 })
 
   // 1) user message kaydet
-  await prisma.chatMessage.create({
-    data: { documentId: id, role: "user", content: text },
+  await db.insert(schema.chatMessages).values({
+    id: crypto.randomUUID(),
+    documentId: id,
+    role: "user",
+    content: text,
+    createdAt: new Date(),
   })
 
   // 2) son 30 mesajı al
-  const recentDesc = await prisma.chatMessage.findMany({
-    where: { documentId: id },
-    orderBy: { createdAt: "desc" },
-    take: 30,
-    select: { role: true, content: true },
-  })
+  const recentDesc = await db
+    .select({ role: schema.chatMessages.role, content: schema.chatMessages.content })
+    .from(schema.chatMessages)
+    .where(eq(schema.chatMessages.documentId, id))
+    .orderBy(desc(schema.chatMessages.createdAt))
+    .limit(30)
+
   const recent = recentDesc.reverse()
 
-  // 3) mevcut deck'i content'ten çek (artifact/legacy fark etmez)
-  const extracted = extractDeck(doc)
+  // 3) mevcut deck state
+  const extracted = extractSlidesStateFromDoc(doc as any)
+  const safeSlides = normalizeSlidesArray(extracted.state.deck.slides).slides
 
-  // legacy ise ilk anda migrate (LLM update öncesi)
-  let currentArtifact = extracted.artifact
-  if (!isArtifactEnvelope(doc.content)) {
-    const migrated = buildArtifactEnvelope({
-      docId: doc.id,
-      title: extracted.deck.title,
-      themeName: extracted.deck.themeName,
-      slides: extracted.deck.slides,
-      prevArtifact: null,
-      bumpVersion: false,
-      pushHistory: false,
-      lastAction: "create",
-    })
-
-    await prisma.document.update({
-      where: { id: doc.id, userId: session.user.id },
-      data: {
-        content: JSON.parse(JSON.stringify(migrated)),
-        artifactType: "slides",
-      },
-    })
-
-    currentArtifact = migrated.artifact
+  const currentDeck = {
+    ...extracted.state.deck,
+    slides: safeSlides,
   }
-
-  const currentSlides = extracted.deck.slides
 
   // 4) LLM komut çalıştır
   const result = await runDeckChatCommand({
     userText: text,
-    deck: {
-      id: doc.id,
-      title: extracted.deck.title,
-      slides: currentSlides,
-      themeName: extracted.deck.themeName,
-    },
-    messages: recent,
+    deck: currentDeck,
+    messages: recent as any,
   })
 
-  // 5) deck güncellendiyse DB’ye yaz (artifact envelope)
+  // 5) deck güncellendiyse DB’ye yaz
+  let nextState = extracted.state
+  let nextVersion = doc.version ?? 1
+
   if (result.updatedDeck) {
-    // ✅ KRİTİK: normalizeSlidesArray artık duplicate id’leri de düzeltir
-    const nextNorm = normalizeSlidesArray(result.updatedDeck.slides)
+    const norm = normalizeSlidesArray(result.updatedDeck.slides)
+    const nextDeck = {
+      ...currentDeck,
+      ...result.updatedDeck,
+      slides: norm.slides,
+      meta: result.updatedDeck.meta ?? currentDeck.meta,
+    }
 
-    const finalSlides =
-      currentSlides.length > 0 && nextNorm.slides.length === 0 ? currentSlides : nextNorm.slides
+    nextState = pushSnapshot({ ...extracted.state, deck: nextDeck }, extracted.state.deck)
 
-    const nextTitle =
-      typeof result.updatedDeck.title === "string" && result.updatedDeck.title.trim()
-        ? result.updatedDeck.title
-        : extracted.deck.title
-
-    const nextTheme =
-      typeof result.updatedDeck.themeName === "string" && result.updatedDeck.themeName.trim()
-        ? result.updatedDeck.themeName
-        : extracted.deck.themeName
-
-    const nextContent = buildArtifactEnvelope({
+    const env = buildSlidesArtifactEnvelope({
       docId: doc.id,
-      title: nextTitle,
-      themeName: nextTheme,
-      slides: finalSlides,
-      prevArtifact: currentArtifact,
+      title: nextDeck.title,
+      themeName: nextDeck.themeName,
+      state: nextState,
+      prevArtifact: extracted.artifact,
       bumpVersion: true,
-      pushHistory: true,
       lastAction: "update",
     })
 
-    await prisma.document.update({
-      where: { id: doc.id, userId: session.user.id },
-      data: {
-        title: nextTitle,
-        themeName: nextTheme,
-        content: JSON.parse(JSON.stringify(nextContent)),
-        version: { increment: 1 },
+    nextVersion = (doc.version ?? 1) + 1
+
+    await db
+      .update(schema.documents)
+      .set({
+        title: nextDeck.title,
+        themeName: nextDeck.themeName,
+        content: env as any,
         artifactType: "slides",
-      },
-    })
+        version: nextVersion,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(schema.documents.id, doc.id), eq(schema.documents.userId, session.user.id)))
   }
 
   // 6) assistant mesajını kaydet
-  await prisma.chatMessage.create({
-    data: {
-      documentId: id,
-      role: "assistant",
-      content: result.assistantText,
-    },
+  await db.insert(schema.chatMessages).values({
+    id: crypto.randomUUID(),
+    documentId: id,
+    role: "assistant",
+    content: result.assistantText,
+    createdAt: new Date(),
   })
 
-  // 7) güncel state dön
-  const outDoc = await prisma.document.findFirst({
-    where: { id, userId: session.user.id },
-    select: {
-      id: true,
-      title: true,
-      content: true,
-      themeName: true,
-      updatedAt: true,
-      version: true,
-      messages: {
-        orderBy: { createdAt: "asc" },
-        select: { id: true, role: true, content: true, createdAt: true },
-      },
-    },
-  })
+  // 7) güncel messages dön (client senkron)
+  const msgs = await db
+    .select({
+      id: schema.chatMessages.id,
+      role: schema.chatMessages.role,
+      content: schema.chatMessages.content,
+      createdAt: schema.chatMessages.createdAt,
+    })
+    .from(schema.chatMessages)
+    .where(eq(schema.chatMessages.documentId, id))
+    .orderBy(asc(schema.chatMessages.createdAt))
 
-  const outExtracted = outDoc ? extractDeck(outDoc) : null
-
+  // doc’u tekrar çekmeden extracted state ile dönüyoruz
   return NextResponse.json({
-    messages: outDoc?.messages ?? [],
-    deck: outDoc
-      ? {
-          id: outDoc.id,
-          title: outExtracted?.deck.title ?? outDoc.title,
-          slides: outExtracted?.deck.slides ?? [],
-          themeName: outExtracted?.deck.themeName ?? outDoc.themeName ?? "Default",
-          updatedAt: outDoc.updatedAt,
-          version: outDoc.version,
-        }
-      : null,
+    messages: msgs,
+    deck: {
+      id: doc.id,
+      title: (result.updatedDeck?.title ?? extracted.state.deck.title) ?? doc.title,
+      slides: result.updatedDeck?.slides ?? extracted.state.deck.slides ?? [],
+      themeName: result.updatedDeck?.themeName ?? extracted.state.deck.themeName ?? (doc.themeName ?? "Default"),
+      meta: result.updatedDeck?.meta ?? extracted.state.deck.meta ?? null,
+      updatedAt: new Date(),
+      version: nextVersion,
+      pastLen: nextState.past.length,
+      futureLen: nextState.future.length,
+    },
   })
 }

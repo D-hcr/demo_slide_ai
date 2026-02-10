@@ -1,467 +1,275 @@
+// /app/api/documents/[id]/route.ts
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
+import { db, schema } from "@/db"
+import { and, eq } from "drizzle-orm"
+import {
+  buildSlidesArtifactEnvelope,
+  extractSlidesStateFromDoc,
+  isArtifactEnvelope,
+  normalizeSlidesArray,
+  pushSnapshot,
+  redoState,
+  undoState,
+} from "@/lib/artifacts/slidesArtifact"
+import type { DeckMeta } from "@/types/slide"
 
-/** -------------------------
- * Artifact helpers (backward compatible)
- * --------------------------*/
+type Ctx = { params: Promise<{ id: string }> }
 
-function isArtifactEnvelope(content: any): boolean {
-  return !!content && typeof content === "object" && !!content.artifact
+function normalizeMeta(input: any): DeckMeta | undefined {
+  if (!input || typeof input !== "object") return undefined
+  const topic = typeof input.topic === "string" ? input.topic.trim() : ""
+  const audience = typeof input.audience === "string" ? input.audience.trim() : ""
+  const tone = typeof input.tone === "string" ? input.tone.trim() : ""
+  const meta: DeckMeta = {}
+  if (topic) meta.topic = topic
+  if (audience) meta.audience = audience
+  if (tone) meta.tone = tone
+  return Object.keys(meta).length ? meta : undefined
 }
 
-function normalizeSlidesArray(input: any): { slides: any[]; changed: boolean } {
-  const arr = Array.isArray(input) ? input : []
-  let changed = false
-
-  const slides = arr.map((s, idx) => {
-    let id = s?.id
-
-    // id'yi her koşulda string yap
-    if (typeof id === "number") {
-      id = String(id)
-      changed = true
-    }
-
-    const idOk = typeof id === "string" && id.trim().length > 0
-    if (!idOk) {
-      id = crypto.randomUUID()
-      changed = true
-    }
-
-    const title =
-      typeof s?.title === "string"
-        ? s.title
-        : s?.title != null
-          ? String(s.title)
-          : "Başlıksız"
-
-    const bulletsRaw = s?.bullets
-    const bullets = Array.isArray(bulletsRaw)
-      ? bulletsRaw.map((b: any) => String(b ?? "")).filter((x: string) => x.trim().length > 0)
-      : []
-
-    const imagePrompt =
-      typeof s?.imagePrompt === "string"
-        ? s.imagePrompt
-        : s?.imagePrompt != null
-          ? String(s.imagePrompt)
-          : ""
-
-    return {
-      ...s,
-      id,
-      title,
-      bullets,
-      imagePrompt,
-      _order: typeof s?._order === "number" ? s._order : idx,
-    }
-  })
-
-  return { slides, changed }
-}
-
-function extractDeckFromContent(doc: {
-  id: string
-  title: string
-  themeName: string | null
-  content: any
-  version?: number | null
-  updatedAt?: any
-}) {
-  // NEW: { artifact: { state: { deck } } }
-  if (isArtifactEnvelope(doc.content)) {
-    const deck = doc.content?.artifact?.state?.deck
-    const slidesRaw = deck?.slides
-    const norm = normalizeSlidesArray(slidesRaw)
-
-    const historyRaw = doc.content?.artifact?.state?.history
-    const history = Array.isArray(historyRaw) ? historyRaw : []
-
-    return {
-      deck: {
-        id: doc.id,
-        title: deck?.title ?? doc.title,
-        slides: norm.slides,
-        themeName: deck?.themeName ?? doc.themeName ?? "Default",
-        updatedAt: (doc as any).updatedAt,
-      },
-      history,
-      norm,
-      artifact: doc.content?.artifact,
-    }
-  }
-
-  // LEGACY: Slide[] array
-  const norm = normalizeSlidesArray(doc.content)
-  return {
-    deck: {
-      id: doc.id,
-      title: doc.title,
-      slides: norm.slides,
-      themeName: doc.themeName ?? "Default",
-      updatedAt: (doc as any).updatedAt,
-    },
-    history: [],
-    norm,
-    artifact: null,
-  }
-}
-
-function buildArtifactEnvelope(args: {
-  docId: string
-  title: string
-  themeName: string
-  slides: any[]
-  prevArtifact?: any | null
-  bumpVersion?: boolean
-  pushHistory?: boolean
-  historyOverride?: any[] | null
-  metaLastAction?: string
-}) {
-  const now = new Date().toISOString()
-
-  const prev = args.prevArtifact
-  const prevVersion = typeof prev?.version === "number" ? prev.version : 1
-  const nextVersion = args.bumpVersion ? prevVersion + 1 : prevVersion
-
-  const prevDeck = prev?.state?.deck
-  const prevHistory =
-    Array.isArray(args.historyOverride)
-      ? args.historyOverride
-      : Array.isArray(prev?.state?.history)
-        ? prev.state.history
-        : []
-
-  const nextDeck = {
-    id: args.docId,
-    title: args.title,
-    slides: args.slides,
-    themeName: args.themeName,
-  }
-
-  const nextHistory =
-    args.pushHistory && prevDeck
-      ? [prevDeck, ...prevHistory].slice(0, 20) // son 20 snapshot
-      : prevHistory
-
-  return {
-    artifact: {
-      id: prev?.id ?? args.docId,
-      type: "slides",
-      title: args.title,
-      version: nextVersion,
-      meta: {
-        status: "ready",
-        lastAction: args.metaLastAction ?? (args.pushHistory ? "update" : "manual-edit"),
-        error: null,
-      },
-      state: {
-        deck: nextDeck,
-        history: nextHistory,
-      },
-      updatedAt: now,
-    },
-  }
-}
-
-/* ======================= */
-/* UNDO (POST)             */
-/* ======================= */
-/**
- * Body:
- * { action: "undo" }
- */
-export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
+export async function GET(_req: Request, context: Ctx) {
   const session = await auth()
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
   const { id } = await context.params
-  if (!id) return NextResponse.json({ error: "Document ID missing" }, { status: 400 })
 
-  const body = await req.json().catch(() => null)
-  const action = body?.action
+  const rows = await db
+    .select({
+      id: schema.documents.id,
+      title: schema.documents.title,
+      content: schema.documents.content,
+      themeName: schema.documents.themeName,
+      updatedAt: schema.documents.updatedAt,
+      version: schema.documents.version,
+    })
+    .from(schema.documents)
+    .where(and(eq(schema.documents.id, id), eq(schema.documents.userId, session.user.id)))
+    .limit(1)
 
-  if (action !== "undo") {
-    return NextResponse.json({ error: "Invalid action" }, { status: 400 })
-  }
+  const doc = rows[0]
+  if (!doc) return NextResponse.json({ error: "Not found" }, { status: 404 })
 
-  const existing = await prisma.document.findFirst({
-    where: { id, userId: session.user.id },
-    select: { id: true, title: true, themeName: true, content: true, version: true, updatedAt: true },
-  })
-  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 })
+  const extracted = extractSlidesStateFromDoc(doc as any)
 
-  // legacy ise önce migrate edelim ki undo mantıklı olsun
-  const extracted = extractDeckFromContent({
-    id: existing.id,
-    title: existing.title,
-    themeName: existing.themeName,
-    content: existing.content,
-    version: existing.version,
-    updatedAt: existing.updatedAt,
-  })
-
-  let artifact = extracted.artifact
-
-  if (!isArtifactEnvelope(existing.content)) {
-    const migrated = buildArtifactEnvelope({
-      docId: existing.id,
-      title: extracted.deck.title,
-      themeName: extracted.deck.themeName,
-      slides: extracted.deck.slides,
+  // legacy -> migrate
+  if (!isArtifactEnvelope(doc.content)) {
+    const env = buildSlidesArtifactEnvelope({
+      docId: doc.id,
+      title: extracted.state.deck.title,
+      themeName: extracted.state.deck.themeName,
+      state: extracted.state,
       prevArtifact: null,
       bumpVersion: false,
-      pushHistory: false,
-      historyOverride: [],
-      metaLastAction: "create",
+      lastAction: "create",
     })
 
-    await prisma.document.update({
-      where: { id: existing.id, userId: session.user.id },
-      data: {
-        content: JSON.parse(JSON.stringify(migrated)),
-        artifactType: "slides",
-      },
+    await db
+      .update(schema.documents)
+      .set({ content: env as any, artifactType: "slides", updatedAt: new Date() })
+      .where(and(eq(schema.documents.id, doc.id), eq(schema.documents.userId, session.user.id)))
+  } else if (extracted.normChanged) {
+    const env = buildSlidesArtifactEnvelope({
+      docId: doc.id,
+      title: extracted.state.deck.title,
+      themeName: extracted.state.deck.themeName,
+      state: extracted.state,
+      prevArtifact: extracted.artifact,
+      bumpVersion: false,
+      lastAction: "manual-edit",
     })
 
-    artifact = migrated.artifact
+    await db
+      .update(schema.documents)
+      .set({ content: env as any, updatedAt: new Date() })
+      .where(and(eq(schema.documents.id, doc.id), eq(schema.documents.userId, session.user.id)))
   }
-
-  const history = Array.isArray(artifact?.state?.history) ? artifact.state.history : []
-  if (history.length === 0) {
-    return NextResponse.json({ error: "Nothing to undo" }, { status: 400 })
-  }
-
-  const prevDeck = history[0]
-  const nextHistory = history.slice(1)
-
-  // prevDeck içindeki slides normalize (id/string vs)
-  const norm = normalizeSlidesArray(prevDeck?.slides)
-  const fixedPrevDeck = {
-    ...prevDeck,
-    slides: norm.slides,
-    id: existing.id,
-    title: prevDeck?.title ?? existing.title,
-    themeName: prevDeck?.themeName ?? existing.themeName ?? "Default",
-  }
-
-  const nextContent = buildArtifactEnvelope({
-    docId: existing.id,
-    title: fixedPrevDeck.title,
-    themeName: fixedPrevDeck.themeName,
-    slides: fixedPrevDeck.slides,
-    prevArtifact: artifact,
-    bumpVersion: true,
-    pushHistory: false, // undo = history tüketiyoruz, yeni snapshot eklemiyoruz
-    historyOverride: nextHistory,
-    metaLastAction: "undo",
-  })
-
-  const updated = await prisma.document.update({
-    where: { id: existing.id, userId: session.user.id },
-    data: {
-      title: nextContent.artifact.title,
-      themeName: nextContent.artifact.state.deck.themeName,
-      content: JSON.parse(JSON.stringify(nextContent)),
-      version: { increment: 1 },
-      artifactType: "slides",
-    },
-  })
-
-  const out = extractDeckFromContent({
-    id: updated.id,
-    title: updated.title,
-    themeName: updated.themeName,
-    content: updated.content,
-    version: updated.version,
-    updatedAt: (updated as any).updatedAt,
-  })
 
   return NextResponse.json({
-    ok: true,
-    deck: out.deck,
-    historyLen: Array.isArray(out.history) ? out.history.length : 0,
-    version: updated.version,
+    id: doc.id,
+    title: extracted.state.deck.title,
+    slides: extracted.state.deck.slides,
+    themeName: extracted.state.deck.themeName,
+    meta: extracted.state.deck.meta ?? null,
+    updatedAt: doc.updatedAt,
+    version: doc.version,
+    pastLen: extracted.state.past.length,
+    futureLen: extracted.state.future.length,
   })
 }
 
-/* ======================= */
-/* UPDATE DOCUMENT (PATCH) */
-/* ======================= */
-export async function PATCH(req: Request, context: { params: Promise<{ id: string }> }) {
+export async function PATCH(req: Request, context: Ctx) {
   const session = await auth()
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
   const { id } = await context.params
-  if (!id) return NextResponse.json({ error: "Document ID missing" }, { status: 400 })
-
   const body = await req.json().catch(() => null)
-  const { title, slides, themeName } = body ?? {}
 
-  if (!Array.isArray(slides)) {
+  const title = typeof body?.title === "string" && body.title.trim() ? body.title.trim() : null
+  const themeName =
+    typeof body?.themeName === "string" && body.themeName.trim() ? body.themeName.trim() : null
+
+  if (!Array.isArray(body?.slides)) {
     return NextResponse.json({ error: "Invalid slides payload" }, { status: 400 })
   }
 
-  // mevcut doc + content oku (artifact varsa version/history koruyacağız)
-  const existing = await prisma.document.findFirst({
-    where: { id, userId: session.user.id },
-    select: { id: true, title: true, themeName: true, content: true, version: true, updatedAt: true },
-  })
-  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 })
+  const incomingMeta = normalizeMeta(body?.meta)
 
-  const extracted = extractDeckFromContent({
-    id: existing.id,
-    title: existing.title,
-    themeName: existing.themeName,
-    content: existing.content,
-    version: existing.version,
-    updatedAt: existing.updatedAt,
-  })
+  const rows = await db
+    .select({
+      id: schema.documents.id,
+      title: schema.documents.title,
+      themeName: schema.documents.themeName,
+      content: schema.documents.content,
+      version: schema.documents.version,
+    })
+    .from(schema.documents)
+    .where(and(eq(schema.documents.id, id), eq(schema.documents.userId, session.user.id)))
+    .limit(1)
 
-  const norm = normalizeSlidesArray(slides)
+  const doc = rows[0]
+  if (!doc) return NextResponse.json({ error: "Not found" }, { status: 404 })
 
-  // content -> artifact envelope yaz
-  const nextContent = buildArtifactEnvelope({
-    docId: existing.id,
-    title: typeof title === "string" && title.trim() ? title : extracted.deck.title,
-    themeName: typeof themeName === "string" && themeName.trim() ? themeName : extracted.deck.themeName,
-    slides: norm.slides,
+  const extracted = extractSlidesStateFromDoc(doc as any)
+
+  const norm = normalizeSlidesArray(body.slides)
+  const nextDeckTitle = title ?? extracted.state.deck.title
+  const nextTheme = themeName ?? extracted.state.deck.themeName
+  const nextMeta = incomingMeta !== undefined ? incomingMeta : (extracted.state.deck.meta ?? undefined)
+
+  const nextState = pushSnapshot(
+    {
+      ...extracted.state,
+      deck: {
+        ...extracted.state.deck,
+        title: nextDeckTitle,
+        themeName: nextTheme,
+        slides: norm.slides,
+        meta: nextMeta,
+      },
+    },
+    extracted.state.deck
+  )
+
+  const env = buildSlidesArtifactEnvelope({
+    docId: doc.id,
+    title: nextDeckTitle,
+    themeName: nextTheme,
+    state: nextState,
     prevArtifact: extracted.artifact,
     bumpVersion: true,
-    pushHistory: true,
-    historyOverride: null,
-    metaLastAction: "update",
+    lastAction: "update",
   })
 
-  const updated = await prisma.document.update({
-    where: { id: existing.id, userId: session.user.id },
-    data: {
-      title: nextContent.artifact.title,
-      themeName: nextContent.artifact.state.deck.themeName,
-      content: JSON.parse(JSON.stringify(nextContent)),
-      version: { increment: 1 },
+  const nextVersion = (doc.version ?? 1) + 1
+
+  await db
+    .update(schema.documents)
+    .set({
+      title: nextDeckTitle,
+      themeName: nextTheme,
+      content: env as any,
       artifactType: "slides",
-    },
-  })
-
-  const out = extractDeckFromContent({
-    id: updated.id,
-    title: updated.title,
-    themeName: updated.themeName,
-    content: updated.content,
-    version: updated.version,
-    updatedAt: (updated as any).updatedAt,
-  })
+      version: nextVersion,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(schema.documents.id, doc.id), eq(schema.documents.userId, session.user.id)))
 
   return NextResponse.json({
-    id: updated.id,
-    title: out.deck.title,
-    slides: out.deck.slides,
-    themeName: out.deck.themeName,
-    updatedAt: (updated as any).updatedAt,
-    version: updated.version,
-    // ✅ ek bilgi (client isterse kullanır)
-    historyLen: Array.isArray(out.history) ? out.history.length : 0,
+    id: doc.id,
+    title: nextDeckTitle,
+    slides: norm.slides,
+    themeName: nextTheme,
+    meta: nextMeta ?? null,
+    version: nextVersion,
+    pastLen: nextState.past.length,
+    futureLen: nextState.future.length,
   })
 }
 
-/* ======================= */
-/* GET DOCUMENT (GET) */
-/* ======================= */
-export async function GET(_req: Request, context: { params: Promise<{ id: string }> }) {
+export async function POST(req: Request, context: Ctx) {
   const session = await auth()
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
   const { id } = await context.params
+  const body = await req.json().catch(() => null)
+  const action = body?.action
 
-  const document = await prisma.document.findFirst({
-    where: { id, userId: session.user.id },
-    select: { id: true, title: true, content: true, themeName: true, updatedAt: true, version: true },
-  })
-
-  if (!document) return NextResponse.json({ error: "Not found" }, { status: 404 })
-
-  const extracted = extractDeckFromContent({
-    id: document.id,
-    title: document.title,
-    themeName: document.themeName,
-    content: document.content,
-    version: document.version,
-    updatedAt: document.updatedAt,
-  })
-
-  // LEGACY ise migrate
-  if (!isArtifactEnvelope(document.content)) {
-    const migrated = buildArtifactEnvelope({
-      docId: document.id,
-      title: extracted.deck.title,
-      themeName: extracted.deck.themeName,
-      slides: extracted.deck.slides,
-      prevArtifact: null,
-      bumpVersion: false,
-      pushHistory: false,
-      historyOverride: [],
-      metaLastAction: "create",
-    })
-
-    await prisma.document.update({
-      where: { id: document.id, userId: session.user.id },
-      data: {
-        content: JSON.parse(JSON.stringify(migrated)),
-        artifactType: "slides",
-      },
-    })
-  } else {
-    // artifact içinde slide normalize gerekiyorsa kalıcı düzelt
-    if (extracted.norm.changed) {
-      const currentArtifact = (document.content as any)?.artifact
-      const next = buildArtifactEnvelope({
-        docId: document.id,
-        title: extracted.deck.title,
-        themeName: extracted.deck.themeName,
-        slides: extracted.norm.slides,
-        prevArtifact: currentArtifact,
-        bumpVersion: false, // GET'te version artırma
-        pushHistory: false,
-        historyOverride: extracted.history,
-        metaLastAction: "manual-edit",
-      })
-
-      await prisma.document.update({
-        where: { id: document.id, userId: session.user.id },
-        data: { content: JSON.parse(JSON.stringify(next)) },
-      })
-    }
+  if (action !== "undo" && action !== "redo") {
+    return NextResponse.json({ error: "Invalid action" }, { status: 400 })
   }
 
-  return NextResponse.json({
-    id: document.id,
-    title: extracted.deck.title,
-    slides: extracted.deck.slides,
-    themeName: extracted.deck.themeName,
-    updatedAt: document.updatedAt,
-    version: document.version,
+  const rows = await db
+    .select({
+      id: schema.documents.id,
+      title: schema.documents.title,
+      themeName: schema.documents.themeName,
+      content: schema.documents.content,
+      version: schema.documents.version,
+    })
+    .from(schema.documents)
+    .where(and(eq(schema.documents.id, id), eq(schema.documents.userId, session.user.id)))
+    .limit(1)
 
-    // ✅ Undo için gerekli ek bilgiler
-    historyLen: Array.isArray(extracted.history) ? extracted.history.length : 0,
-    history: extracted.history, // istersen UI'da timeline yaparsın
+  const doc = rows[0]
+  if (!doc) return NextResponse.json({ error: "Not found" }, { status: 404 })
+
+  const extracted = extractSlidesStateFromDoc(doc as any)
+
+  let nextState = extracted.state
+  if (action === "undo") {
+    if (!nextState.past.length) return NextResponse.json({ error: "Nothing to undo" }, { status: 400 })
+    nextState = undoState(nextState)
+  } else {
+    if (!nextState.future.length) return NextResponse.json({ error: "Nothing to redo" }, { status: 400 })
+    nextState = redoState(nextState)
+  }
+
+  const norm = normalizeSlidesArray(nextState.deck.slides)
+  nextState = { ...nextState, deck: { ...nextState.deck, slides: norm.slides } }
+
+  const env = buildSlidesArtifactEnvelope({
+    docId: doc.id,
+    title: nextState.deck.title,
+    themeName: nextState.deck.themeName,
+    state: nextState,
+    prevArtifact: extracted.artifact,
+    bumpVersion: true,
+    lastAction: action,
+  })
+
+  const nextVersion = (doc.version ?? 1) + 1
+
+  await db
+    .update(schema.documents)
+    .set({
+      title: nextState.deck.title,
+      themeName: nextState.deck.themeName,
+      content: env as any,
+      artifactType: "slides",
+      version: nextVersion,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(schema.documents.id, doc.id), eq(schema.documents.userId, session.user.id)))
+
+  return NextResponse.json({
+    ok: true,
+    deck: nextState.deck,
+    version: nextVersion,
+    pastLen: nextState.past.length,
+    futureLen: nextState.future.length,
   })
 }
 
-/* ======================= */
-/* DELETE DOCUMENT (DELETE) */
-/* ======================= */
-export async function DELETE(_req: Request, context: { params: Promise<{ id: string }> }) {
+export async function DELETE(_req: Request, context: Ctx) {
   const session = await auth()
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
   const { id } = await context.params
-  if (!id) return NextResponse.json({ error: "Document ID missing" }, { status: 400 })
 
-  await prisma.document.delete({
-    where: { id, userId: session.user.id },
-  })
+  await db
+    .delete(schema.documents)
+    .where(and(eq(schema.documents.id, id), eq(schema.documents.userId, session.user.id)))
 
   return NextResponse.json({ ok: true })
 }

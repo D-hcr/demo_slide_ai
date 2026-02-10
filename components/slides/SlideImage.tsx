@@ -32,6 +32,14 @@ async function waitForImage(url: string, tries = 6, delayMs = 350) {
   return false
 }
 
+function isAbortError(err: any) {
+  return (
+    err?.name === "AbortError" ||
+    err?.code === "ABORT_ERR" ||
+    String(err?.message ?? "").toLowerCase().includes("aborted")
+  )
+}
+
 export function SlideImage({
   imagePrompt,
   imageUrl,
@@ -90,6 +98,7 @@ export function SlideImage({
     generatedKeyRef.current = key
 
     const controller = new AbortController()
+    let alive = true
 
     async function generateOnce(seedToUse: number) {
       const res = await fetch("/api/image/generate", {
@@ -104,36 +113,45 @@ export function SlideImage({
 
     async function run() {
       setLoading(true)
+
       try {
         const data1 = await generateOnce(Number(resolvedSeed))
 
-        // ✅ önce göster + parent’a bildir (save zinciri çalışsın)
-        if (!controller.signal.aborted) {
-          setLocalImageUrl(data1.imageUrl)
-          onGeneratedRef.current?.(data1.imageUrl)
-        }
+        if (!alive || controller.signal.aborted) return
+        setLocalImageUrl(data1.imageUrl)
+        onGeneratedRef.current?.(data1.imageUrl)
 
-        // ✅ sonra arka planda yüklenmesini bekle (generate retry değil)
         await waitForImage(data1.imageUrl)
-      } catch (e1) {
+      } catch (e1: any) {
+        // ✅ abort normal → sessiz çık
+        if (isAbortError(e1) || controller.signal.aborted || !alive) return
+
+        // ✅ sadece gerçek hatada retry
         try {
           const data2 = await generateOnce(Number(resolvedSeed) + 99991)
-          if (!controller.signal.aborted) {
-            setLocalImageUrl(data2.imageUrl)
-            onGeneratedRef.current?.(data2.imageUrl)
-          }
+
+          if (!alive || controller.signal.aborted) return
+          setLocalImageUrl(data2.imageUrl)
+          onGeneratedRef.current?.(data2.imageUrl)
+
           await waitForImage(data2.imageUrl)
-        } catch (e2) {
+        } catch (e2: any) {
+          if (isAbortError(e2) || controller.signal.aborted || !alive) return
+
           console.error("Image generate error:", e1, e2)
           generatedKeyRef.current = ""
         }
       } finally {
-        if (!controller.signal.aborted) setLoading(false)
+        if (alive && !controller.signal.aborted) setLoading(false)
       }
     }
 
     run()
-    return () => controller.abort()
+
+    return () => {
+      alive = false
+      controller.abort()
+    }
   }, [enableAI, imagePrompt, localImageUrl, resolvedSeed])
 
   if (loading) {

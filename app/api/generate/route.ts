@@ -1,68 +1,72 @@
+// /app/api/generate/route.ts
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
+import { db, schema } from "@/db"
 import { generateSlides } from "@/lib/groq"
+import { buildSlidesArtifactEnvelope } from "@/lib/artifacts/slidesArtifact"
 
 function withIds(slides: any[]) {
-  return slides.map((s, i) => ({
+  return (slides ?? []).map((s: any) => ({
     ...s,
     id: crypto.randomUUID(),
-    _order: i,
   }))
 }
 
 export async function POST(req: Request) {
   const session = await auth()
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  }
+  if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-  const { topic } = await req.json()
+  const { topic, audience, tone } = await req.json().catch(() => ({} as any))
   if (!topic || typeof topic !== "string") {
     return NextResponse.json({ error: "Invalid topic" }, { status: 400 })
   }
 
-  const rawDeck = await generateSlides(topic)
+  const rawDeck = await generateSlides(topic, { topic, audience, tone })
   const slides = withIds(rawDeck.slides ?? [])
 
-  const content = {
-    artifact: {
-      id: crypto.randomUUID(),
-      type: "slides",
+  const docId = crypto.randomUUID()
+
+  const initialState = {
+    deck: {
+      id: docId,
       title: rawDeck.title ?? "Yeni Sunum",
-      version: 1,
-      meta: {
-        status: "ready",
-        lastAction: "create",
-        error: null,
-      },
-      state: {
-        deck: {
-          id: "deck",
-          title: rawDeck.title ?? "Yeni Sunum",
-          themeName: rawDeck.themeName ?? "Default",
-          slides,
-        },
-        history: [],
-      },
-      updatedAt: new Date().toISOString(),
+      themeName: rawDeck.themeName ?? "Default",
+      slides,
+      meta: { topic, audience, tone },
     },
+    past: [],
+    future: [],
   }
 
-  const doc = await prisma.document.create({
-    data: {
-      title: content.artifact.title,
-      content,
-      themeName: content.artifact.state.deck.themeName,
-      userId: session.user.id,
-      artifactType: "slides",
-    },
+  const env = buildSlidesArtifactEnvelope({
+    docId,
+    title: initialState.deck.title,
+    themeName: initialState.deck.themeName,
+    state: initialState as any,
+    prevArtifact: null,
+    bumpVersion: false,
+    lastAction: "create",
+  })
+
+  const now = new Date()
+
+  await db.insert(schema.documents).values({
+    id: docId,
+    title: initialState.deck.title,
+    themeName: initialState.deck.themeName,
+    artifactType: "slides",
+    version: 1,
+    content: env as any,
+    userId: session.user.id,
+    createdAt: now,
+    updatedAt: now,
   })
 
   return NextResponse.json({
-    id: doc.id,
-    title: content.artifact.title,
+    id: docId,
+    title: initialState.deck.title,
     slides,
-    themeName: content.artifact.state.deck.themeName,
+    themeName: initialState.deck.themeName,
+    meta: initialState.deck.meta,
   })
 }

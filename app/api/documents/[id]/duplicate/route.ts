@@ -1,44 +1,116 @@
-import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+// /app/api/documents/[id]/duplicate/route.ts
+import { NextResponse } from "next/server"
+import { auth } from "@/lib/auth"
+import { db, schema } from "@/db"
+import { and, eq } from "drizzle-orm"
+import {
+  extractSlidesStateFromDoc,
+  buildSlidesArtifactEnvelope,
+  normalizeSlidesArray,
+} from "@/lib/artifacts/slidesArtifact"
 
-export async function POST(
-  _req: Request,
-  context: { params: Promise<{ id: string }> }
-) {
-  const session = await auth();
+function deepCloneJson<T>(x: T): T {
+  return JSON.parse(JSON.stringify(x))
+}
 
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+function remapSlidesWithFreshIds(slides: any[]) {
+  const arr = Array.isArray(slides) ? slides : []
+  return arr.map((s) => ({
+    ...s,
+    id: crypto.randomUUID(), // ✅ yeni uniq id
+  }))
+}
 
-  const { id } = await context.params;
-  if (!id) {
-    return NextResponse.json({ error: "Document ID missing" }, { status: 400 });
-  }
+export async function POST(_req: Request, context: { params: Promise<{ id: string }> }) {
+  const session = await auth()
+  if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-  const src = await prisma.document.findFirst({
-    where: { id, userId: session.user.id },
-  });
+  const { id } = await context.params
+  if (!id) return NextResponse.json({ error: "Document ID missing" }, { status: 400 })
 
-  if (!src) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
+  const rows = await db
+    .select({
+      id: schema.documents.id,
+      title: schema.documents.title,
+      themeName: schema.documents.themeName,
+      content: schema.documents.content,
+      artifactType: schema.documents.artifactType,
+    })
+    .from(schema.documents)
+    .where(and(eq(schema.documents.id, id), eq(schema.documents.userId, session.user.id)))
+    .limit(1)
 
-  const copy = await prisma.document.create({
-    data: {
-      title: `${src.title} (Kopya)`,
-      content: src.content ?? [],
-      themeName: src.themeName ?? "Default",
-      userId: session.user.id,
+  const src = rows[0]
+  if (!src) return NextResponse.json({ error: "Not found" }, { status: 404 })
+
+  const extracted = extractSlidesStateFromDoc({
+    id: src.id,
+    title: src.title,
+    themeName: src.themeName ?? "Default",
+    content: src.content,
+  } as any)
+
+  // ✅ normalize + fresh ids
+  const norm = normalizeSlidesArray(extracted.state.deck.slides)
+  const freshSlides = remapSlidesWithFreshIds(norm.slides)
+
+  const newDocId = crypto.randomUUID()
+  const newTitle = `${src.title} (Kopya)`
+  const newTheme = extracted.state.deck.themeName ?? src.themeName ?? "Default"
+
+  const nextState = {
+    deck: {
+      id: newDocId,
+      title: newTitle,
+      themeName: newTheme,
+      slides: freshSlides,
     },
-    select: {
-      id: true,
-      title: true,
-      themeName: true,
-      updatedAt: true,
-    },
-  });
+    past: [],
+    future: [],
+  }
 
-  return NextResponse.json(copy);
+  const envelope = buildSlidesArtifactEnvelope({
+    docId: newDocId,
+    title: newTitle,
+    themeName: newTheme,
+    state: nextState as any,
+    prevArtifact: null,
+    bumpVersion: false,
+    lastAction: "create",
+  })
+
+  const now = new Date()
+
+  // ✅ Drizzle bazı driverlarda returning(selectObject) desteklemiyor.
+  // En sağlam: insert + sonra select
+  await db.insert(schema.documents).values({
+    id: newDocId,
+    title: newTitle,
+    themeName: newTheme,
+    artifactType: "slides",
+    version: 1,
+    content: deepCloneJson(envelope) as any,
+    userId: session.user.id,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  const createdRows = await db
+    .select({
+      id: schema.documents.id,
+      title: schema.documents.title,
+      themeName: schema.documents.themeName,
+      updatedAt: schema.documents.updatedAt,
+      version: schema.documents.version,
+    })
+    .from(schema.documents)
+    .where(and(eq(schema.documents.id, newDocId), eq(schema.documents.userId, session.user.id)))
+    .limit(1)
+
+  const created = createdRows[0]
+  if (!created) {
+    return NextResponse.json({ error: "Duplicate failed" }, { status: 500 })
+  }
+
+  return NextResponse.json(created)
 }

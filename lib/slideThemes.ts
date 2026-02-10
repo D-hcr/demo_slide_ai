@@ -4,7 +4,7 @@ const base = {
   titleSize: "text-4xl",
   bulletSize: "text-xl",
   fontFamily: "font-sans",
-}
+} as const
 
 const baseRules = {
   imageStyle: {
@@ -18,7 +18,12 @@ const baseRules = {
   },
 } as const
 
-export const defaultTheme: SlideTheme = {
+function makeTheme(t: SlideTheme): Readonly<SlideTheme> {
+  // shallow freeze yeterli (nested objeler zaten literal + as const)
+  return Object.freeze(t)
+}
+
+export const defaultTheme = makeTheme({
   name: "Default",
   backgroundClass: "bg-white",
   textClass: "text-zinc-900",
@@ -35,10 +40,12 @@ export const defaultTheme: SlideTheme = {
   gradient: { enabled: false, direction: "top-bottom", from: "#ffffff", to: "#ffffff" },
   overlay: { enabled: false, color: "#000000", opacity: 0.35 },
 
-  ...baseRules,
-}
+  // ✅ shared ref olmasın diye spread (defansif)
+  imageStyle: { ...baseRules.imageStyle },
+  exportRules: { ...baseRules.exportRules },
+} satisfies SlideTheme)
 
-export const darkTheme: SlideTheme = {
+export const darkTheme = makeTheme({
   name: "Dark",
   backgroundClass: "bg-zinc-950",
   textClass: "text-zinc-50",
@@ -55,10 +62,11 @@ export const darkTheme: SlideTheme = {
   gradient: { enabled: false, direction: "top-bottom", from: "#0b0f19", to: "#0b0f19" },
   overlay: { enabled: false, color: "#000000", opacity: 0.45 },
 
-  ...baseRules,
-}
+  imageStyle: { ...baseRules.imageStyle },
+  exportRules: { ...baseRules.exportRules },
+} satisfies SlideTheme)
 
-export const sunsetTheme: SlideTheme = {
+export const sunsetTheme = makeTheme({
   name: "Sunset",
   backgroundClass: "bg-orange-50",
   textClass: "text-zinc-900",
@@ -76,10 +84,11 @@ export const sunsetTheme: SlideTheme = {
   gradient: { enabled: false, direction: "top-bottom", from: "#fff7ed", to: "#fed7aa" },
   overlay: { enabled: false, color: "#000000", opacity: 0.35 },
 
-  ...baseRules,
-}
+  imageStyle: { ...baseRules.imageStyle },
+  exportRules: { ...baseRules.exportRules },
+} satisfies SlideTheme)
 
-export const forestTheme: SlideTheme = {
+export const forestTheme = makeTheme({
   name: "Forest",
   backgroundClass: "bg-emerald-50",
   textClass: "text-zinc-900",
@@ -96,10 +105,11 @@ export const forestTheme: SlideTheme = {
   gradient: { enabled: false, direction: "top-bottom", from: "#ecfdf5", to: "#bbf7d0" },
   overlay: { enabled: false, color: "#000000", opacity: 0.35 },
 
-  ...baseRules,
-}
+  imageStyle: { ...baseRules.imageStyle },
+  exportRules: { ...baseRules.exportRules },
+} satisfies SlideTheme)
 
-export const royalTheme: SlideTheme = {
+export const royalTheme = makeTheme({
   name: "Royal",
   backgroundClass: "bg-indigo-50",
   textClass: "text-zinc-900",
@@ -116,10 +126,11 @@ export const royalTheme: SlideTheme = {
   gradient: { enabled: false, direction: "left-right", from: "#eef2ff", to: "#e0e7ff" },
   overlay: { enabled: false, color: "#000000", opacity: 0.35 },
 
-  ...baseRules,
-}
+  imageStyle: { ...baseRules.imageStyle },
+  exportRules: { ...baseRules.exportRules },
+} satisfies SlideTheme)
 
-export const minimalTheme: SlideTheme = {
+export const minimalTheme = makeTheme({
   name: "Minimal",
   backgroundClass: "bg-white",
   textClass: "text-zinc-950",
@@ -136,18 +147,43 @@ export const minimalTheme: SlideTheme = {
   gradient: { enabled: false, direction: "top-bottom", from: "#ffffff", to: "#ffffff" },
   overlay: { enabled: false, color: "#000000", opacity: 0.35 },
 
-  ...baseRules,
-}
+  imageStyle: { ...baseRules.imageStyle },
+  exportRules: { ...baseRules.exportRules },
+} satisfies SlideTheme)
 
-export const slideThemes: SlideTheme[] = [
+/** ✅ sabit sıra, sabit referans */
+export const slideThemes = Object.freeze([
   defaultTheme,
   darkTheme,
   minimalTheme,
   royalTheme,
   forestTheme,
   sunsetTheme,
-]
+] as const)
 
+/** ✅ toleranslı tema bulma (trim + case-insensitive) */
 export function getThemeByName(name?: string): SlideTheme {
-  return slideThemes.find((t) => t.name === name) ?? defaultTheme
+  const q = (name ?? "").trim().toLowerCase()
+  if (!q) return defaultTheme
+  return slideThemes.find((t) => t.name.toLowerCase() === q) ?? defaultTheme
+}
+
+/** ✅ DB / LLM’den gelen themeName’i güvenli hale getir */
+export function resolveThemeName(name?: string): string {
+  return getThemeByName(name).name
+}
+
+/**
+ * ✅ Step 8 hazırlığı (deterministik):
+ * konuya göre otomatik tema seçimi (istersen sonra AI ile geliştiririz)
+ */
+export function pickThemeForTopic(topic?: string): SlideTheme {
+  const t = (topic ?? "").toLowerCase()
+
+  if (/(finans|bank|yatırım|borsa|risk|compliance|kurumsal)/.test(t)) return royalTheme
+  if (/(enerji|iklim|çevre|sürdürülebilir|yeşil|doğa)/.test(t)) return forestTheme
+  if (/(tasarım|yaratıcı|pazarlama|marka|sunum|storytelling)/.test(t)) return sunsetTheme
+  if (/(teknoloji|yapay zeka|ai|data|siber|cloud|saas)/.test(t)) return darkTheme
+
+  return defaultTheme
 }

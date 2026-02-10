@@ -1,11 +1,8 @@
-import CreateDocumentForm from "@/components/documents/CreateDocumentForm"
-import type { SlideDeck } from "@/types/slide"
+// app/generate/page.tsx
+import GenerateClient from "./GenerateClient"
+
+export const dynamic = "force-dynamic"
 
 export default function GeneratePage() {
-  return (
-    <div className="p-8">
-      <h1 className="text-2xl font-semibold mb-4">Create Slides</h1>
-      <CreateDocumentForm onGenerated={(_deck: SlideDeck) => {}} />
-    </div>
-  )
+  return <GenerateClient />
 }
