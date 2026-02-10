@@ -1,0 +1,7 @@
+name = "slide-ai-pdf-renderer"
+main = "src/index.ts"
+compatibility_date = "2025-01-30"
+compatibility_flags = ["nodejs_compat"]
+
+[browser]
+binding = "BROWSER"

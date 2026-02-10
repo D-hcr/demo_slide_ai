@@ -1,4 +1,3 @@
-// /app/api/documents/[id]/export/pdf/route.ts
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { db, schema } from "@/db"
@@ -7,9 +6,9 @@ import { getThemeByName } from "@/lib/slideThemes"
 import { extractSlidesFromContent, getExportDebugInfo } from "@/lib/export/slidesExtract"
 import { buildSlidesHtml } from "@/lib/export/pdfTemplate"
 import { toDataUri } from "@/lib/export/imageData"
-import { renderHtmlToPdfBuffer } from "@/lib/export/puppeteerPdf"
+import { renderPdfViaWorker } from "@/lib/export/pdfClient"
 
-export const maxDuration = 120 
+export const maxDuration = 120
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
@@ -22,7 +21,11 @@ function safeFilename(name: string) {
 function safeJson(raw: any) {
   if (!raw) return null
   if (typeof raw === "string") {
-    try { return JSON.parse(raw) } catch { return null }
+    try {
+      return JSON.parse(raw)
+    } catch {
+      return null
+    }
   }
   if (typeof raw === "object") return raw
   return null
@@ -84,7 +87,7 @@ export async function GET(req: Request, context: { params: Promise<{ id: string 
       .where(and(eq(schema.documents.id, doc.id), eq(schema.documents.userId, session.user.id)))
   }
 
-  // ✅ Görselleri data-uri embed et (PDF’de dış istek azalır)
+  // images to data-uri (PDF dış istek azalır)
   const slidesWithImages = await Promise.all(
     slides.map(async (s: any) => {
       const url = typeof s.imageUrl === "string" ? s.imageUrl : ""
@@ -97,7 +100,12 @@ export async function GET(req: Request, context: { params: Promise<{ id: string 
   const theme = getThemeByName(doc.themeName ?? "Default")
   const html = buildSlidesHtml(slidesWithImages, theme)
 
-  const pdfBuffer = await renderHtmlToPdfBuffer(html)
+  const workerUrl = process.env.PDF_WORKER_URL
+  if (!workerUrl) {
+    return NextResponse.json({ error: "PDF_WORKER_URL is not set" }, { status: 500 })
+  }
+
+  const pdfBuffer = await renderPdfViaWorker({ workerUrl, html })
 
   const filename = encodeURIComponent(safeFilename(doc.title) + ".pdf")
 
