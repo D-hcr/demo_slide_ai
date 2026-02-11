@@ -1,4 +1,3 @@
-// lib/export/pdfTemplate.ts
 import type { SlideTheme } from "@/types/slide"
 
 function escapeHtml(input: string) {
@@ -8,6 +7,11 @@ function escapeHtml(input: string) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;")
+}
+
+function escapeAttr(input: string) {
+  // HTML attribute içinde güvenli kullanım için basit kaçış
+  return escapeHtml(input).replaceAll("`", "&#096;")
 }
 
 function cssGradient(theme: SlideTheme) {
@@ -30,7 +34,6 @@ function cssGradient(theme: SlideTheme) {
 }
 
 export function buildSlidesHtml(slides: any[], theme: SlideTheme) {
-  // ✅ yeni theme modelinde palette var
   const bg = theme.palette?.background ?? (theme as any).exportBackground ?? "#ffffff"
   const fg = theme.palette?.foreground ?? (theme as any).exportText ?? "#111111"
   const accent = theme.palette?.accent ?? (theme as any).exportAccent ?? "#2563eb"
@@ -40,6 +43,8 @@ export function buildSlidesHtml(slides: any[], theme: SlideTheme) {
   const overlayOpacity = typeof theme.overlay?.opacity === "number" ? theme.overlay.opacity : 0.45
 
   const g = cssGradient(theme)
+  const radius = theme.imageStyle?.radius ?? 20
+  const shadowCss = theme.imageStyle?.shadow ? "0 18px 50px rgba(0,0,0,0.25)" : "none"
 
   const slideSections = slides
     .map((s: any, idx: number) => {
@@ -56,10 +61,9 @@ export function buildSlidesHtml(slides: any[], theme: SlideTheme) {
       // FULL IMAGE
       if (layout === "full-image") {
         const bgEl = imageUrl
-          ? `<img class="bgImg" src="${imageUrl}" />`
+          ? `<div class="bgCover" style="background-image:url('${escapeAttr(imageUrl)}')"></div>`
           : `<div class="bgPlaceholder"></div>`
 
-        // ✅ overlay artık KOŞULLU
         const overlayEl = overlayEnabled ? `<div class="overlay"></div>` : ``
 
         return `
@@ -101,15 +105,19 @@ export function buildSlidesHtml(slides: any[], theme: SlideTheme) {
           }
         </div>
       `
-
       const imageBlock = imageUrl
-        ? `<div class="imgCol"><img class="img" src="${imageUrl}" /></div>`
+        ? `<div class="imgCol">
+            <div class="imgWrap hasImg">
+              <img class="img" src="${escapeAttr(imageUrl)}" />
+            </div>
+          </div>`
         : `<div class="imgCol placeholder">
-             <div class="phBox">
-               <div class="phTitle">Görsel yok</div>
-               <div class="phSub">ImagePrompt ekleyip “Regenerate Image” yapabilirsin.</div>
-             </div>
-           </div>`
+            <div class="imgWrap phBox">
+              <div class="phTitle">Görsel yok</div>
+              <div class="phSub">ImagePrompt ekleyip “Regenerate Image” yapabilirsin.</div>
+            </div>
+          </div>`
+
 
       return `
         <section class="slide">
@@ -202,18 +210,46 @@ export function buildSlidesHtml(slides: any[], theme: SlideTheme) {
           justify-content: center;
         }
 
-        .img {
+        .imgWrap{
           width: 100%;
           height: 78%;
-          object-fit: cover;
+          border-radius: ${radius}px;
+          overflow: hidden;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          box-sizing: border-box;
+        }
+
+        .imgWrap.hasImg{
+          background: transparent;
+          border: none;
+        }
+
+        .img {
+          width: 100%;
+          height: 100%;
+          object-fit: contain; /* cover yerine contain */
           border-radius: ${theme.imageStyle?.radius ?? 20}px;
           ${theme.imageStyle?.shadow ? "box-shadow: 0 18px 50px rgba(0,0,0,0.25);" : "box-shadow: none;"}
+        }
+
+        .imgCover {
+          width: 100%;
+          height: 78%;
+          border-radius: ${radius}px;
+          box-shadow: ${shadowCss};
+          background-size: cover;
+          background-position: center;
+          background-repeat: no-repeat;
+          /* bazı render’larda daha stabil olsun */
+          transform: translateZ(0);
         }
 
         .imgCol.placeholder .phBox{
           width: 100%;
           height: 78%;
-          border-radius: ${theme.imageStyle?.radius ?? 20}px;
+          border-radius: ${radius}px;
           background: rgba(0,0,0,0.06);
           border: 1px dashed rgba(0,0,0,0.22);
           display:flex;
@@ -229,13 +265,18 @@ export function buildSlidesHtml(slides: any[], theme: SlideTheme) {
 
         /* FULL IMAGE */
         .fullImage { padding: 0; background: ${g ? g : bg}; }
-        .fullImage .bgImg,
+        .fullImage .bgCover,
         .fullImage .bgPlaceholder {
           position: absolute;
           inset: 0;
           width: 1280px;
           height: 720px;
-          object-fit: cover;
+        }
+        .fullImage .bgCover {
+          background-size: cover;
+          background-position: center;
+          background-repeat: no-repeat;
+          transform: translateZ(0);
         }
         .fullImage .bgPlaceholder {
           background: ${g ? g : `linear-gradient(135deg, rgba(0,0,0,0.10), rgba(0,0,0,0.25))`};
@@ -246,13 +287,19 @@ export function buildSlidesHtml(slides: any[], theme: SlideTheme) {
           background: ${overlayColor};
           opacity: ${overlayOpacity};
         }
+
         .fullImage .inner {
           position: relative;
           padding: 64px 72px;
-          height: 720px;
-          box-sizing: border-box;
+        - height: 720px;
+        - weight: 800px;
+        - box-sizing: border-box;
+        + height: 100%;
+        + weight: 100%;
+        + box-sizing: border-box;
           color: #fff;
         }
+
         .fullImage .title,
         .fullImage .bullets { color: #fff; }
         .fullImage .meta { color: rgba(255,255,255,0.75); }

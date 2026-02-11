@@ -45,6 +45,68 @@ function normalizeLayoutForExport(s: AnySlide) {
   return "text-left"
 }
 
+// ===============================
+// ✅ Image size from data-uri
+// ===============================
+function getImageSizeFromDataUri(dataUri: string): { w: number; h: number } | null {
+  try {
+    const base64 = dataUri.split(",")[1] || ""
+    const buf = Buffer.from(base64, "base64")
+
+    // PNG: 0x89504E47, width/height at 16..23
+    if (buf.length > 24 && buf.readUInt32BE(0) === 0x89504e47) {
+      const w = buf.readUInt32BE(16)
+      const h = buf.readUInt32BE(20)
+      if (w > 0 && h > 0) return { w, h }
+    }
+
+    // JPEG: SOF0/SOF2
+    if (buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+      let i = 2
+      while (i + 9 < buf.length) {
+        if (buf[i] !== 0xff) {
+          i++
+          continue
+        }
+        const marker = buf[i + 1]
+        const len = buf.readUInt16BE(i + 2)
+        if (marker === 0xc0 || marker === 0xc2) {
+          const h = buf.readUInt16BE(i + 5)
+          const w = buf.readUInt16BE(i + 7)
+          if (w > 0 && h > 0) return { w, h }
+          return null
+        }
+        if (!len) break
+        i += 2 + len
+      }
+    }
+
+    return null
+  } catch {
+    return null
+  }
+}
+
+// ✅ contain: kırpma yok
+function fitContain(imgW: number, imgH: number, boxX: number, boxY: number, boxW: number, boxH: number) {
+  const s = Math.min(boxW / imgW, boxH / imgH)
+  const w = imgW * s
+  const h = imgH * s
+  const x = boxX + (boxW - w) / 2
+  const y = boxY + (boxH - h) / 2
+  return { x, y, w, h }
+}
+
+// ✅ cover: kutuyu doldurur (crop olabilir)
+function fitCover(imgW: number, imgH: number, boxX: number, boxY: number, boxW: number, boxH: number) {
+  const s = Math.max(boxW / imgW, boxH / imgH)
+  const w = imgW * s
+  const h = imgH * s
+  const x = boxX + (boxW - w) / 2
+  const y = boxY + (boxH - h) / 2
+  return { x, y, w, h }
+}
+
 export async function buildPptxBuffer(args: {
   slides: AnySlide[]
   theme: SlideTheme
@@ -64,8 +126,7 @@ export async function buildPptxBuffer(args: {
   const allowOverlay = args.theme.exportRules?.pptx?.allowOverlay !== false
   const overlayEnabled = allowOverlay && !!(args.theme.overlay?.enabled || args.theme.imageStyle?.overlayOnImage)
   const overlayColor = hex(args.theme.overlay?.color ?? "#000000", "000000")
-  const overlayOpacity =
-    typeof args.theme.overlay?.opacity === "number" ? args.theme.overlay.opacity : 0.55
+  const overlayOpacity = typeof args.theme.overlay?.opacity === "number" ? args.theme.overlay.opacity : 0.55
 
   for (let idx = 0; idx < args.slides.length; idx++) {
     const s = args.slides[idx]
@@ -84,8 +145,8 @@ export async function buildPptxBuffer(args: {
       y: 0.5,
       w: 1.0,
       h: 0.12,
-      fill: { color: accent },
-      line: { color: accent, transparency: 100 },
+      fill: { color: bg }, // ✅ slide background
+      line: { color: bg, transparency: 100 },
     } as any)
 
     slide.addText(`Slide ${idx + 1}`, {
@@ -99,14 +160,20 @@ export async function buildPptxBuffer(args: {
       transparency: 45,
     })
 
-    const dataUri = (s?.imageData && s.imageData.startsWith("data:")) ? s.imageData : null
+    const dataUri = s?.imageData && s.imageData.startsWith("data:") ? s.imageData : null
 
     // =========================
-    // FULL IMAGE
+    // FULL IMAGE (cover)
     // =========================
     if (layout === "full-image") {
       if (dataUri) {
-        slide.addImage({ data: dataUri, x: 0, y: 0, w: W, h: H })
+        const size = getImageSizeFromDataUri(dataUri)
+        if (size) {
+          const r = fitCover(size.w, size.h, 0, 0, W, H)
+          slide.addImage({ data: dataUri, x: r.x, y: r.y, w: r.w, h: r.h })
+        } else {
+          slide.addImage({ data: dataUri, x: 0, y: 0, w: W, h: H })
+        }
       }
 
       if (overlayEnabled) {
@@ -187,12 +254,19 @@ export async function buildPptxBuffer(args: {
       y: imgY,
       w: imgW,
       h: imgH,
-      fill: { color: "F4F4F5" },
-      line: { color: "E4E4E7" },
+      fill: { color: "FFFFFF", transparency: 100 },
+      line: { color: "FFFFFF", transparency: 100},
     } as any)
 
     if (dataUri) {
-      slide.addImage({ data: dataUri, x: imgX, y: imgY, w: imgW, h: imgH })
+      const size = getImageSizeFromDataUri(dataUri)
+      if (size) {
+        const r = fitContain(size.w, size.h, imgX, imgY, imgW, imgH)
+        slide.addImage({ data: dataUri, x: r.x, y: r.y, w: r.w, h: r.h })
+      } else {
+        // fallback
+        slide.addImage({ data: dataUri, x: imgX, y: imgY, w: imgW, h: imgH })
+      }
     } else {
       slide.addText("Görsel yok", {
         x: imgX,

@@ -48,39 +48,38 @@ export default function ActiveSlideView({
   const layout = normalizeLayout(slide)
   const hasImage = !!(slide.imagePrompt && slide.imagePrompt.trim())
 
-  const ImageBlock =
-    layout === "full-image" ? null : (
-      <div className="w-[44%]">
-        <div
-          className="h-full overflow-hidden border"
-          style={{
-            borderRadius: theme.imageStyle?.radius ?? 20,
-            borderColor: "rgba(0,0,0,0.10)",
-            background: "rgba(0,0,0,0.05)",
-          }}
-        >
-          {hasImage ? (
-            <div className="h-full p-3">
+  // ActiveSlideView.tsx içinde ImageBlock'ı bununla değiştir
+const ImageBlock =
+  layout === "full-image" ? null : (
+    <div className="w-[44%]">
+      <div
+        className="h-full overflow-hidden border"
+        style={{
+          borderRadius: theme.imageStyle?.radius ?? 20,
+          borderColor: "rgba(0,0,0,0.10)",
+          background: "rgba(0,0,0,0.05)",
+        }}
+      >
+        {hasImage ? (
+          <div className="h-full p-3">
+            <div className="aspect-video w-full">
               <SlideImage
                 imagePrompt={slide.imagePrompt}
                 imageUrl={slide.imageUrl}
                 seed={slide.id}
                 onGenerated={(url) => onChange({ ...slide, imageUrl: url })}
+                className="object-cover" // UI'da güzel dursun
               />
             </div>
-          ) : (
-            <div className="h-full flex items-center justify-center p-8 text-center">
-              <div>
-                <div className="text-sm font-semibold opacity-70">Görsel yok</div>
-                <div className="text-xs opacity-50 mt-1">
-                  Image prompt ekleyip “AI Prompt” veya “Görseli Yenile” ile oluştur.
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="h-full flex items-center justify-center p-8 text-center">
+            ...
+          </div>
+        )}
       </div>
-    )
+    </div>
+  )
 
   const TextBlock = (
     <div className="flex-1 min-w-0">

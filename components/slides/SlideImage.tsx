@@ -1,3 +1,4 @@
+// /components/slides/SlideImage.tsx
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
@@ -8,13 +9,15 @@ type SlideImageProps = {
   onGenerated?: (url: string) => void
   enableAI?: boolean
   seed?: number | string
+
+  // ✅ NEW
+  className?: string
 }
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-// URL hemen hazır olmayabiliyor (CDN gecikmesi vs.)
 async function waitForImage(url: string, tries = 6, delayMs = 350) {
   for (let i = 0; i < tries; i++) {
     try {
@@ -46,6 +49,7 @@ export function SlideImage({
   onGenerated,
   enableAI = true,
   seed,
+  className,
 }: SlideImageProps) {
   const [loading, setLoading] = useState(false)
   const [localImageUrl, setLocalImageUrl] = useState<string | undefined>(imageUrl)
@@ -58,12 +62,10 @@ export function SlideImage({
   const lastPromptRef = useRef<string>("")
   const generatedKeyRef = useRef<string>("")
 
-  // ✅ Parent'tan gelen imageUrl her değiştiğinde (undefined dahil) local'i sync et
   useEffect(() => {
     setLocalImageUrl(imageUrl)
   }, [imageUrl])
 
-  // Prompt değiştiyse yeniden üretime izin ver + local görseli temizle
   useEffect(() => {
     const p = (imagePrompt ?? "").trim()
     if (lastPromptRef.current && lastPromptRef.current !== p) {
@@ -86,11 +88,8 @@ export function SlideImage({
 
   useEffect(() => {
     if (!enableAI) return
-
     const prompt = (imagePrompt ?? "").trim()
     if (!prompt) return
-
-    // local’de görsel varsa üretme
     if (localImageUrl) return
 
     const key = `${prompt}::${resolvedSeed}`
@@ -113,31 +112,22 @@ export function SlideImage({
 
     async function run() {
       setLoading(true)
-
       try {
         const data1 = await generateOnce(Number(resolvedSeed))
-
         if (!alive || controller.signal.aborted) return
         setLocalImageUrl(data1.imageUrl)
         onGeneratedRef.current?.(data1.imageUrl)
-
         await waitForImage(data1.imageUrl)
       } catch (e1: any) {
-        // ✅ abort normal → sessiz çık
         if (isAbortError(e1) || controller.signal.aborted || !alive) return
-
-        // ✅ sadece gerçek hatada retry
         try {
           const data2 = await generateOnce(Number(resolvedSeed) + 99991)
-
           if (!alive || controller.signal.aborted) return
           setLocalImageUrl(data2.imageUrl)
           onGeneratedRef.current?.(data2.imageUrl)
-
           await waitForImage(data2.imageUrl)
         } catch (e2: any) {
           if (isAbortError(e2) || controller.signal.aborted || !alive) return
-
           console.error("Image generate error:", e1, e2)
           generatedKeyRef.current = ""
         }
@@ -147,7 +137,6 @@ export function SlideImage({
     }
 
     run()
-
     return () => {
       alive = false
       controller.abort()
@@ -155,12 +144,12 @@ export function SlideImage({
   }, [enableAI, imagePrompt, localImageUrl, resolvedSeed])
 
   if (loading) {
-    return <div className="mt-4 h-40 w-full animate-pulse rounded-xl bg-gray-200" />
+    return <div className="h-full w-full animate-pulse rounded-xl bg-gray-200" />
   }
 
   if (!localImageUrl) {
     return (
-      <div className="mt-4 h-40 w-full rounded-xl border border-dashed border-gray-300 flex items-center justify-center text-sm text-gray-400">
+      <div className="h-full w-full rounded-xl border border-dashed border-gray-300 flex items-center justify-center text-sm text-gray-400">
         Görsel henüz oluşturulmadı
       </div>
     )
@@ -170,7 +159,7 @@ export function SlideImage({
     <img
       src={localImageUrl}
       alt="Slide visual"
-      className="mt-4 w-full rounded-xl object-cover shadow-md transition"
+      className={["w-full h-full rounded-xl shadow-md transition", className ?? "object-cover"].join(" ")}
     />
   )
 }
