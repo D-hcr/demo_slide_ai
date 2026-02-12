@@ -1,36 +1,94 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🚀 Slide AI — AI-Powered Presentation Generator
 
-## Getting Started
+> Generate, edit, and export professional slide decks using AI — deployed on Cloudflare Edge.
 
-First, run the development server:
+**Live Demo:**  
+👉 https://slide-ai.slide-ai-h.workers.dev
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+---
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 📌 Overview
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+**Slide AI** is an AI-powered presentation builder developed using **Next.js App Router**, modern LLM APIs, and deployed fully on **Cloudflare Workers**.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The application allows users to generate complete slide decks from natural language, edit content interactively, regenerate text or images using AI, and export presentations to **PDF** or **PPTX**.
 
-## Learn More
+This project was built as a technical case focusing on:
 
-To learn more about Next.js, take a look at the following resources:
+- Production-ready architecture  
+- Edge deployment  
+- Scalable AI integration  
+- Secure authentication  
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## ✨ Features
 
-## Deploy on Vercel
+### AI Slide Generation
+- Generate full slide decks from user prompts
+- Structured slide format (title, bullets, image prompt, layout)
+- Controlled prompt design for consistency
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### AI Image Generation
+- Generate images per slide
+- Regenerate individual images
+- CDN-safe loading with retry handling
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Slide Editor
+**Left Panel**
+- Slide navigation
+- Reordering & selection
+
+**Right Panel**
+- Editable title & bullet points
+- Editable image prompt
+- Layout selection
+- Autosave on change
+
+### Export
+- 📄 PDF export (Puppeteer via Cloudflare Worker)
+- 📊 PPTX export
+- Theme-aware rendering
+- Edge-compatible pipeline
+
+### Authentication
+- Google OAuth (Auth.js / NextAuth)
+- Secure session management
+- User-based document isolation
+
+---
+
+## 🏗 Architecture
+
+### Frontend & Backend
+- Next.js 16 (App Router)
+- Server Components + Client Components separation
+- Route Handlers for API logic
+- Edge-compatible execution
+
+### AI Layer
+- Direct LLM integration (no Vercel AI SDK)
+- Modular AI service structure
+- Async handling with loading/error states
+- Regenerate workflows
+
+### Database
+- PostgreSQL (Neon)
+- Drizzle ORM
+- Edge + Node runtime compatibility
+
+---
+
+## ☁️ Cloudflare Deployment
+
+Fully deployed on **Cloudflare Free Plan**
+
+**Stack**
+- OpenNext → Next.js on Workers
+- Cloudflare Workers (Edge runtime)
+- Wrangler for deployment
+- Separate PDF rendering Worker
+- Service Binding between Workers
+
+### Infrastructure Flow
+
